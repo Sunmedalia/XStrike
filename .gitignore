@@ -1,0 +1,22 @@
+# Rust build output
+/target/
+
+# Build artifacts (cross-compiled binaries, COFF objects, etc.)
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+*.exp
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
