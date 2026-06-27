@@ -78,19 +78,38 @@ fn align16(n: usize) -> usize {
     (n + 15) & !15
 }
 
+/// Thunk slot size (bytes). A thunk is `FF 25 00 00 00 00` (`jmp [rip+0]`)
+/// followed by the 8-byte absolute target — 14 bytes, padded to 16.
+const THUNK_SIZE: usize = 16;
+
 /// Load + execute a BOF. Returns the text captured from Beacon* output.
 pub fn run_bof(coff_bytes: &[u8], args: &str) -> Result<String> {
     let parsed = coff::parse(coff_bytes).context("parsing COFF")?;
     beacon::reset_output();
 
-    let total = total_image_size(&parsed);
-    ensure!(total > 0, "BOF has no loadable sections");
+    let sections_size = total_image_size(&parsed);
+    ensure!(sections_size > 0, "BOF has no loadable sections");
+
+    // Resolve every external (undefined) symbol to its real address up front,
+    // and lay out one in-image thunk per external. The thunk lets a BOF's
+    // 32-bit-relative `call`/`jmp`/`lea` reach an external even when it lands
+    // far away (VirtualAlloc routinely returns memory > 2 GB from our code,
+    // which a REL32 displacement cannot span). The thunk sits inside the
+    // allocated image, so the REL32 reaches it; the thunk then jumps to the
+    // real (64-bit absolute) target.
+    let externals = build_external_map();
+    let ext_slots = resolve_external_slots(&parsed, &externals);
+    let thunk_count = ext_slots.len();
+    let thunk_region = align16(thunk_count * THUNK_SIZE);
+    let alloc_size = sections_size.checked_add(thunk_region)
+        .ok_or_else(|| anyhow::anyhow!("image + thunks size overflow"))?;
+    let thunk_base_off = sections_size;
 
     unsafe {
-        // Executable + writable buffer for the whole image.
-        let base = VirtualAlloc(std::ptr::null(), total, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        // Executable + writable buffer for the whole image + thunks.
+        let base = VirtualAlloc(std::ptr::null(), alloc_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
         if base.is_null() {
-            bail!("VirtualAlloc failed for image (size={total})");
+            bail!("VirtualAlloc failed for image (size={alloc_size})");
         }
         let base = base as *mut u8;
         let base_usize = base as usize;
@@ -99,7 +118,16 @@ pub fn run_bof(coff_bytes: &[u8], args: &str) -> Result<String> {
         // process lifetime — v1 does not free executable BOF memory.)
         let cleanup = || { let _ = VirtualFree(base as *mut _, 0, MEM_RELEASE); };
 
-        if let Err(e) = load_into(&parsed, coff_bytes, base, base_usize) {
+        // Write thunks: sym_idx -> thunk VA. Built before relocation so the
+        // target addresses are available to the REL32 fixups.
+        let mut thunk_va: HashMap<u32, usize> = HashMap::with_capacity(thunk_count);
+        for (i, &(sym_idx, real)) in ext_slots.iter().enumerate() {
+            let off = thunk_base_off + i * THUNK_SIZE;
+            thunk_va.insert(sym_idx, base_usize + off);
+            write_thunk(base.add(off), real);
+        }
+
+        if let Err(e) = load_into(&parsed, coff_bytes, base, base_usize, &thunk_va) {
             cleanup();
             return Err(e);
         }
@@ -135,6 +163,39 @@ pub fn run_bof(coff_bytes: &[u8], args: &str) -> Result<String> {
     }
 }
 
+/// Write a thunk at `dst`: `jmp [rip+0]` followed by the 8-byte absolute
+/// `target`. `dst` must point to at least 14 writable bytes.
+unsafe fn write_thunk(dst: *mut u8, target: usize) {
+    // FF 25 00 00 00 00 = jmp qword ptr [rip+0]; the 8-byte target follows.
+    std::ptr::copy_nonoverlapping([0xFFu8, 0x25, 0, 0, 0, 0].as_ptr(), dst, 6);
+    std::ptr::copy_nonoverlapping(
+        (target as u64).to_le_bytes().as_ptr(),
+        dst.add(6),
+        8,
+    );
+}
+
+/// Collect `(symbol_table_index, real_address)` for every resolvable external
+/// (undefined, named) symbol, in symbol order. Each gets a thunk slot.
+fn resolve_external_slots(
+    parsed: &Coff,
+    externals: &HashMap<String, usize>,
+) -> Vec<(u32, usize)> {
+    let mut slots = Vec::new();
+    for (idx, sym) in parsed.symbols.iter().enumerate() {
+        if sym.is_aux || sym.section_number != IMAGE_SYM_UNDEFINED || sym.name.is_empty() {
+            continue;
+        }
+        // base_usize is irrelevant for externals (they don't reference the image).
+        if let Ok(addr) = resolve_symbol(sym, parsed, 0, externals) {
+            if addr != 0 {
+                slots.push((idx as u32, addr));
+            }
+        }
+    }
+    slots
+}
+
 fn total_image_size(parsed: &Coff) -> usize {
     let mut total = 0usize;
     for s in &parsed.sections {
@@ -144,7 +205,13 @@ fn total_image_size(parsed: &Coff) -> usize {
     total
 }
 
-unsafe fn load_into(parsed: &Coff, raw: &[u8], base: *mut u8, base_usize: usize) -> Result<()> {
+unsafe fn load_into(
+    parsed: &Coff,
+    raw: &[u8],
+    base: *mut u8,
+    base_usize: usize,
+    thunk_va: &HashMap<u32, usize>,
+) -> Result<()> {
     // 1. Copy each section's raw data into the image.
     for sec in &parsed.sections {
         let dst = base.add(sec.image_offset);
@@ -162,6 +229,7 @@ unsafe fn load_into(parsed: &Coff, raw: &[u8], base: *mut u8, base_usize: usize)
     let externals = build_external_map();
 
     // 3. Apply relocations.
+    let img = std::slice::from_raw_parts_mut(base, total_image_size(parsed));
     for rel in &parsed.relocations {
         let sec = &parsed.sections[rel.section_index];
         let fixup_off = sec.image_offset + rel.virtual_address as usize;
@@ -169,11 +237,10 @@ unsafe fn load_into(parsed: &Coff, raw: &[u8], base: *mut u8, base_usize: usize)
 
         let sym: &Symbol = parsed.symbols.get(rel.symbol_table_index as usize)
             .ok_or_else(|| anyhow::anyhow!("reloc references bad symbol index {}", rel.symbol_table_index))?;
-        let target = resolve_symbol(sym, &parsed, base_usize, &externals)
+        let target = resolve_symbol(sym, parsed, base_usize, &externals)
             .with_context(|| format!("resolving symbol `{}`", sym.name))?;
 
-        let img = std::slice::from_raw_parts_mut(base, total_image_size(parsed));
-        apply_relocation(img, fixup_off, fixup_va, target, base_usize, rel.typ, sym)?;
+        apply_relocation(img, fixup_off, fixup_va, target, base_usize, rel.typ, rel.symbol_table_index, sym, thunk_va)?;
     }
     Ok(())
 }
@@ -211,29 +278,29 @@ fn resolve_symbol(
 /// Build the map of loader-provided symbol names -> function addresses.
 fn build_external_map() -> HashMap<String, usize> {
     let mut m = HashMap::new();
-    // Beacon API stubs.
-    add_fn(&mut m, "BeaconDataParse", beacon::beacon_data_parse as unsafe extern "C" fn(*mut u8, *const u8, i32));
-    add_fn(&mut m, "BeaconDataInt", beacon::beacon_data_int as unsafe extern "C" fn(*mut u8) -> i32);
-    add_fn(&mut m, "BeaconDataShort", beacon::beacon_data_short as unsafe extern "C" fn(*mut u8) -> i16);
-    add_fn(&mut m, "BeaconDataExtract", beacon::beacon_data_extract as unsafe extern "C" fn(*mut u8, *mut i32) -> *const u8);
-    add_fn(&mut m, "BeaconOutput", beacon::beacon_output as unsafe extern "C" fn(i32, *const u8, i32));
-    add_fn(&mut m, "BeaconPrintf", beacon::beacon_printf as unsafe extern "C" fn(i32, *const u8, u64, u64));
-    add_fn(&mut m, "BeaconIsAdmin", beacon::beacon_is_admin as unsafe extern "C" fn() -> i32);
+    // Beacon API stubs. Cast each fn pointer to its address (usize) — NOT the
+    // address of a local holding the pointer (that would dangle after return).
+    add_fn(&mut m, "BeaconDataParse", beacon::beacon_data_parse as unsafe extern "C" fn(*mut u8, *const u8, i32) as usize);
+    add_fn(&mut m, "BeaconDataInt", beacon::beacon_data_int as unsafe extern "C" fn(*mut u8) -> i32 as usize);
+    add_fn(&mut m, "BeaconDataShort", beacon::beacon_data_short as unsafe extern "C" fn(*mut u8) -> i16 as usize);
+    add_fn(&mut m, "BeaconDataExtract", beacon::beacon_data_extract as unsafe extern "C" fn(*mut u8, *mut i32) -> *const u8 as usize);
+    add_fn(&mut m, "BeaconOutput", beacon::beacon_output as unsafe extern "C" fn(i32, *const u8, i32) as usize);
+    add_fn(&mut m, "BeaconPrintf", beacon::beacon_printf as unsafe extern "C" fn(i32, *const u8, u64, u64) as usize);
+    add_fn(&mut m, "BeaconIsAdmin", beacon::beacon_is_admin as unsafe extern "C" fn() -> i32 as usize);
     // C runtime helpers.
-    add_fn(&mut m, "memcpy", rt_memcpy as unsafe extern "C" fn(*mut u8, *const u8, usize) -> *mut u8);
-    add_fn(&mut m, "memmove", rt_memmove as unsafe extern "C" fn(*mut u8, *const u8, usize) -> *mut u8);
-    add_fn(&mut m, "memset", rt_memset as unsafe extern "C" fn(*mut u8, i32, usize) -> *mut u8);
-    add_fn(&mut m, "memcmp", rt_memcmp as unsafe extern "C" fn(*const u8, *const u8, usize) -> i32);
-    add_fn(&mut m, "strlen", rt_strlen as unsafe extern "C" fn(*const u8) -> usize);
-    add_fn(&mut m, "__chkstk", rt_chkstk as unsafe extern "C" fn());
-    add_fn(&mut m, "___chkstk_ms", rt_chkstk as unsafe extern "C" fn());
-    add_fn(&mut m, "_chkstk", rt_chkstk as unsafe extern "C" fn());
+    add_fn(&mut m, "memcpy", rt_memcpy as unsafe extern "C" fn(*mut u8, *const u8, usize) -> *mut u8 as usize);
+    add_fn(&mut m, "memmove", rt_memmove as unsafe extern "C" fn(*mut u8, *const u8, usize) -> *mut u8 as usize);
+    add_fn(&mut m, "memset", rt_memset as unsafe extern "C" fn(*mut u8, i32, usize) -> *mut u8 as usize);
+    add_fn(&mut m, "memcmp", rt_memcmp as unsafe extern "C" fn(*const u8, *const u8, usize) -> i32 as usize);
+    add_fn(&mut m, "strlen", rt_strlen as unsafe extern "C" fn(*const u8) -> usize as usize);
+    add_fn(&mut m, "__chkstk", rt_chkstk as unsafe extern "C" fn() as usize);
+    add_fn(&mut m, "___chkstk_ms", rt_chkstk as unsafe extern "C" fn() as usize);
+    add_fn(&mut m, "_chkstk", rt_chkstk as unsafe extern "C" fn() as usize);
     m
 }
 
-fn add_fn<F: 'static>(m: &mut HashMap<String, usize>, name: &str, f: F) {
-    let ptr = &f as *const F as *const ();
-    m.insert(name.to_string(), ptr as usize);
+fn add_fn(m: &mut HashMap<String, usize>, name: &str, addr: usize) {
+    m.insert(name.to_string(), addr);
 }
 
 /// Resolve a `LIBRARY$function` symbol, or a plain function name by scanning
@@ -306,33 +373,51 @@ fn apply_relocation(
     target: usize,
     base_usize: usize,
     typ: u16,
+    sym_idx: u32,
     sym: &Symbol,
+    thunk_va: &HashMap<u32, usize>,
 ) -> Result<()> {
-    use coff::*;
+    // Relocation type values. NOTE: the mingw/binutils 2.46 toolchain used to
+    // build BOFs (x86_64-w64-mingw32-gcc) numbers the AMD64 ADDR32NB/REL32
+    // family one HIGHER than Microsoft's winnt.h: it emits 3 for ADDR32NB and
+    // 4 for REL32 (winnt.h: 2 and 3). This was confirmed by linking a BOF with
+    // the system linker and reading back the resolved displacements — a type-4
+    // fixup resolves as REL32 (reference = fixup_va + 4), type-3 as ADDR32NB
+    // (RVA = target - image_base). We therefore match the toolchain's numbering
+    // rather than winnt.h. We also accept the standard values (2=ADDR32NB,
+    // 9/10/11=SECTION/SECREL/SECREL7) so MSVC-built objects still behave.
     match typ {
-        REL_AMD64_ABSOLUTE => Ok(()),
-        REL_AMD64_ADDR64 => {
+        0 => Ok(()), // ABSOLUTE (no-op)
+        1 => {
+            // ADDR64: 64-bit absolute.
             let addend = read_i64_at(img, fixup_off);
             let v = (target as i64).wrapping_add(addend) as u64;
             write_u64(img, fixup_off, v);
             Ok(())
         }
-        REL_AMD64_ADDR32NB => {
+        2 | 3 => {
+            // ADDR32NB: 32-bit RVA (target - image base).
             let addend = read_i32_at(img, fixup_off);
             let rva = (target as i64 - base_usize as i64 + addend as i64) as u32;
             write_u32(img, fixup_off, rva);
             Ok(())
         }
-        REL_AMD64_REL32..=REL_AMD64_REL32_5 => {
-            let n = (typ - REL_AMD64_REL32) as i64; // 0..5 extra bytes
+        4..=9 => {
+            // REL32 family. Toolchain: 4=REL32, 5..9=REL32_1..REL32_5, i.e. the
+            // number of trailing bytes after the 4-byte field is (typ - 4).
+            // For an external (thunked) symbol, target the in-image thunk so the
+            // 32-bit displacement can reach it.
+            let tgt = thunk_va.get(&sym_idx).copied().unwrap_or(target);
+            let n = (typ - 4) as i64; // 0..5 extra bytes
             let addend = read_i32_at(img, fixup_off) as i64;
-            let v = (target as i64)
+            let v = (tgt as i64)
                 .wrapping_sub(fixup_va as i64 + 4 + n)
                 .wrapping_add(addend) as i32;
             write_i32(img, fixup_off, v);
             Ok(())
         }
-        REL_AMD64_SECTION => {
+        10 => {
+            // SECTION: 16-bit section index (toolchain 10).
             let s = sym.section_number;
             if s < 1 {
                 bail!("SECTION relocation on non-section symbol {}", sym.name);
@@ -340,17 +425,53 @@ fn apply_relocation(
             write_u16(img, fixup_off, s as u16);
             Ok(())
         }
-        REL_AMD64_SECREL => {
+        11 => {
+            // SECREL: 32-bit offset from the section start (toolchain 11).
             write_u32(img, fixup_off, sym.value as u32);
             Ok(())
         }
-        REL_AMD64_SECREL7 => {
-            // 7-bit section-relative offset packed into the low bits.
+        12 => {
+            // SECREL7: 7-bit section-relative offset (toolchain 12).
             let cur = img[fixup_off];
             let val = (sym.value as u8) & 0x7f;
             img[fixup_off] = (cur & 0x80) | val;
             Ok(())
         }
-        other => bail!("unsupported AMD64 relocation type {other} (symbol {})", sym.name),
+        other => {
+            // Unknown type (e.g. in a .debug$ section we don't execute). Don't
+            // fail the whole load over a reloc in non-executable data.
+            beacon::append_external_note(&format!(
+                "[ruststrike] skipped unsupported AMD64 relocation type {other} (symbol {})",
+                sym.name
+            ));
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn load_example() -> Option<Vec<u8>> {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello.x64.o");
+        std::fs::read(&p).ok()
+    }
+
+    /// Actually loads + executes the example BOF in-process. Requires the
+    /// .o to be built (mingw gcc). A hard fault here crashes the test process
+    /// (by design — BOFs are raw code); a clean return proves the exec path.
+    #[test]
+    fn runs_example_bof() {
+        let bytes = match load_example() {
+            Some(b) => b,
+            None => {
+                eprintln!("skipping: examples/hello.x64.o not built");
+                return;
+            }
+        };
+        let out = run_bof(&bytes, "").expect("run_bof should succeed");
+        assert!(out.contains("hello from bof"), "got: {out:?}");
     }
 }

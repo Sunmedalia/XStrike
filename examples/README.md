@@ -7,24 +7,36 @@ and exposes the standard `go(char* args, int alen)` entry point.
 match `crates/loader/src/beacon.rs` (original/size/length/buffer at offsets
 0/8/12/16). If you change one, change the other.
 
-## Build (Linux cross-compile)
+## Build the BOF (Windows, native)
+
+The BOF is a C file compiled to an x64 COFF object. Build it with the MinGW
+gcc toolchain (e.g. via MSYS2 / mingw-w64). `gcc` and `x86_64-w64-mingw32-gcc`
+both work on a Windows host:
 
 ```sh
+gcc -c examples/hello.c -o examples/hello.x64.o
+# or
 x86_64-w64-mingw32-gcc -c examples/hello.c -o examples/hello.x64.o
 ```
 
-This produces an x64 COFF object (`hello.x64.o`) that the loader can parse and
-execute.
+Do **not** pass `-g` unless you strip debug sections afterward — `.debug_*`
+sections carry relocation types the loader skips (non-fatal, but noisy). The
+loader is sensitive to the reloc type numbering emitted by this toolchain (see
+"Toolchain note" in `CLAUDE.md`); use the same `x86_64-w64-mingw32-gcc` that
+produced the tested object.
 
-## End-to-end test (requires a Windows host for the implant)
+This produces an x64 COFF object (`hello.x64.o`, gitignored as `*.o`) that the
+loader can parse and execute.
 
-1. Build the server (Linux): `cargo build -p ruststrike-server`
-2. Cross-build the implant: `cargo build -p ruststrike-implant --target x86_64-pc-windows-gnu`
-3. Build the example BOF (above).
-4. Run the server: `./target/debug/ruststrike-server 4444`
-5. On the Windows host, run the implant pointing at the server:
-   `ruststrike-implant.exe <server-ip> 4444`
-6. In the server console:
+## End-to-end test (single Windows host)
+
+1. Build everything natively (a `rust-toolchain.toml` pins stable MSVC):
+   `cargo build --release`
+2. Build the example BOF (above).
+3. Run the server: `./target/release/ruststrike-server.exe 4444`
+4. In another terminal, run the implant pointing back at the server:
+   `./target/release/ruststrike-implant.exe 127.0.0.1 4444`
+5. In the server console:
    - type `hello` → expect `[implant] hello: hello from implant`
    - type `load examples/hello.x64.o` → expect `[implant] output: hello from bof`
 

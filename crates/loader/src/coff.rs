@@ -55,6 +55,12 @@ pub struct Symbol {
     pub typ: u16,
     pub storage_class: u8,
     pub number_of_aux_symbols: u8,
+    /// True for aux-record placeholder slots. COFF aux records are 18-byte
+    /// entries that follow a primary symbol and carry auxiliary data (section
+    /// length, function-end table, source filename, …) — not real symbols.
+    /// They MUST occupy a slot in `symbols` so that relocation symbol indices
+    /// (which index into the full on-disk table, aux included) line up.
+    pub is_aux: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -163,7 +169,9 @@ pub fn parse(bytes: &[u8]) -> Result<Coff> {
         image_offset += aligned.max(16);
     }
 
-    // Symbols (skip aux records but keep their slots so indices line up).
+    // Symbols. Aux records are kept as placeholder slots so that the index of
+    // each entry in `symbols` equals its on-disk symbol-table index —
+    // relocations reference symbols by that index (aux included).
     let mut symbols = Vec::with_capacity(num_symbols);
     let mut i = 0;
     while i < num_symbols {
@@ -181,8 +189,24 @@ pub fn parse(bytes: &[u8]) -> Result<Coff> {
             typ,
             storage_class,
             number_of_aux_symbols,
+            is_aux: false,
         });
-        i += 1 + number_of_aux_symbols as usize;
+        // Reserve a (zeroed) slot per aux record so indices stay aligned. Aux
+        // entries are never the target of a relocation; they're skipped by the
+        // lookup helpers below.
+        for _ in 0..number_of_aux_symbols {
+            symbols.push(Symbol {
+                name: String::new(),
+                value: 0,
+                section_number: 0,
+                typ: 0,
+                storage_class: 0,
+                number_of_aux_symbols: 0,
+                is_aux: true,
+            });
+            i += 1;
+        }
+        i += 1;
     }
 
     // Relocations (10-byte records per section).
@@ -210,7 +234,7 @@ impl Coff {
     /// in-section value, or None.
     pub fn find_defined(&self, name: &str) -> Option<(usize, i32)> {
         for s in &self.symbols {
-            if s.name == name && s.section_number >= 1 {
+            if !s.is_aux && s.name == name && s.section_number >= 1 {
                 return Some((s.section_number as usize - 1, s.value));
             }
         }
@@ -221,7 +245,7 @@ impl Coff {
     pub fn external_names(&self) -> Vec<&str> {
         self.symbols
             .iter()
-            .filter(|s| s.section_number == IMAGE_SYM_UNDEFINED && !s.name.is_empty())
+            .filter(|s| !s.is_aux && s.section_number == IMAGE_SYM_UNDEFINED && !s.name.is_empty())
             .map(|s| s.name.as_str())
             .collect()
     }

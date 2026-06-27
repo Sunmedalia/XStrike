@@ -1,7 +1,8 @@
 //! ruststrike-implant: Windows implant. Connects back to the server over TCP,
 //! dispatches `hello` and `bof` messages, and returns output/error.
 //!
-//! Build target: x86_64-pc-windows-gnu.
+//! Build: native Windows (`cargo build` with the stable MSVC toolchain pinned by
+//! `rust-toolchain.toml`). No cross-compile target is required.
 
 use anyhow::{Context, Result};
 use ruststrike_loader::run_bof;

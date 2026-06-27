@@ -1,0 +1,9 @@
+[toolchain]
+# Pin to stable MSVC. The loader's transitive dep `zmij` (serde_json's float
+# backend) uses `std::hint::select_unpredictable`, which only stabilized after
+# the 2025-05 nightly this machine defaulted to — stable builds out of the box.
+#
+# We pin the FULL triple (not bare "stable") because rustup host detection
+# under MSYS2/MINGW bash mis-reports the host as x86_64-unknown-linux-gnu; the
+# explicit triple sidesteps that and uses the already-installed stable-msvc.
+channel = "stable-x86_64-pc-windows-msvc"
