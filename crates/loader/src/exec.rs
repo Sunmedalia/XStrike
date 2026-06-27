@@ -65,9 +65,38 @@ pub extern "C" fn rt_strlen(s: *const u8) -> usize {
         i
     }
 }
-/// `__chkstk` / `___chkstk_ms` no-op: stack probing is unnecessary for our
-/// small in-process frames; treat as a no-op return.
-pub extern "C" fn rt_chkstk() {}
+/// `__chkstk` / `___chkstk_ms`: touch stack pages so the OS commits them.
+///
+/// Calling convention (x64, both MSVC `__chkstk` and mingw `___chkstk_ms`):
+/// the requested allocation size in bytes arrives in `rax`; the routine must
+/// probe each 4 KiB page between the current `rsp` and `rsp - size` so Windows
+/// grows the stack (and raises a stack-overflow exception if exhausted), then
+/// return with `rax` preserved. Returning without probing is only safe for
+/// frames < one page — BOFs that allocate large buffers (e.g. a 64 KiB output
+/// buffer) touch memory the OS hasn't committed yet and fault. So we probe.
+pub extern "C" fn rt_chkstk() {
+    // rax carries the requested allocation size (x64 __chkstk / ___chkstk_ms
+    // ABI). We don't read it from Rust — the asm below uses the live hardware
+    // value — but `inout` requires a Rust-side value, so pass a dummy.
+    let _: usize;
+    unsafe {
+        core::arch::asm!(
+            "mov r11, rax",          // save original request size
+            "mov r10, rsp",
+            "2:",
+            "sub r10, {page}",       // step down one page
+            "test [r10], r10",        // touch the page (forces commit)
+            "sub rax, {page}",
+            "jg 2b",                  // while rax > 0, keep probing
+            "mov rax, r11",           // restore original request size
+            page = const 0x1000usize,
+            inout("rax") 0usize => _,
+            out("r10") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+}
 
 /// Generic unimplemented Beacon API stub — records a note and returns 0.
 pub extern "C" fn beacon_unimplemented() {
@@ -535,5 +564,30 @@ mod nbtscan_tests {
             Ok(o) => eprintln!("NBTSCAN OK:\n{o}"),
             Err(e) => panic!("NBTSCAN ERR: {e:#}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod cmd_exec_tests {
+    use super::*;
+    use std::path::Path;
+    /// Runs the cmd_exec BOF with `whoami` and checks the output contains the
+    /// current user. Requires examples/cmd_exec.x64.o + cmd_exec_whoami.bin.
+    #[test]
+    fn run_cmd_exec_whoami() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/cmd_exec.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/cmd_exec.x64.o not built"); return; }
+        };
+        let args = match std::fs::read(dir.join("../../examples/cmd_exec_whoami.bin")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/cmd_exec_whoami.bin not built"); return; }
+        };
+        let out = run_bof(&bof, &args).expect("cmd_exec should succeed");
+        eprintln!("CMD_EXEC OUTPUT:\n{out}");
+        // whoami prints DOMAIN\user or user; assert non-empty and no error marker.
+        assert!(!out.contains("cmd_exec:"), "BOF reported error: {out}");
+        assert!(out.trim().len() > 0, "expected whoami output, got empty");
     }
 }

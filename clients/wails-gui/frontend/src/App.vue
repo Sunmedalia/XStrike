@@ -18,7 +18,13 @@ const status = ref('connecting to core…')
 const runMode = ref<'lib' | 'b64'>('lib')
 const selBof = ref<string>('')
 const b64Coff = ref('')
-const argsText = ref('') // hex or base64? we send as base64; allow raw text -> b64
+// Args can come from typed text (encoded to base64) OR a raw binary file
+// (read verbatim -> base64). Real BOFs (nbtscan, LDAP, …) need the binary CS
+// packed format, which can't be typed — use the file source for those.
+const argsSrc = ref<'none' | 'text' | 'file'>('none')
+const argsText = ref('')
+const argsFileB64 = ref('')
+const argsFileName = ref('')
 
 const selected = computed(() => implants.value.find(i => i.id === selectedId.value) || null)
 
@@ -60,11 +66,35 @@ async function doDrop() {
   try { await DropImplant(selectedId.value); await refresh() } catch (e: any) { appendLog(selectedId.value, '[err] ' + (e?.message||e)) }
 }
 
-// args input: treat as text -> base64 (simplest for typing). Empty allowed.
+// Build the base64 args buffer from the chosen source.
 function argsB64(): string {
-  const t = argsText.value
-  if (!t) return ''
-  return btoa(unescape(encodeURIComponent(t)))
+  if (argsSrc.value === 'text' && argsText.value) {
+    return btoa(unescape(encodeURIComponent(argsText.value)))
+  }
+  if (argsSrc.value === 'file' && argsFileB64.value) {
+    return argsFileB64.value
+  }
+  return ''
+}
+function argsDesc(): string {
+  if (argsSrc.value === 'text') return argsText.value || '<none>'
+  if (argsSrc.value === 'file') return argsFileName.value || '<none>'
+  return '<none>'
+}
+
+// Pick a binary args file (.bin) and read it verbatim into base64.
+function pickArgsFile() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.onchange = async () => {
+    const f = input.files?.[0]
+    if (!f) return
+    const buf = await f.arrayBuffer()
+    argsFileB64.value = btoa(String.fromCharCode(...new Uint8Array(buf)))
+    argsFileName.value = f.name
+    argsSrc.value = 'file'
+  }
+  input.click()
 }
 
 async function doRun() {
@@ -73,11 +103,11 @@ async function doRun() {
   try {
     if (runMode.value === 'lib') {
       if (!selBof.value) { appendLog(id, '[err] pick a BOF'); return }
-      appendLog(id, `>> run ${selBof.value} (args=${argsText.value || '<none>'})`)
+      appendLog(id, `>> run ${selBof.value} (args=${argsDesc()})`)
       await RunBofByName(id, selBof.value, argsB64())
     } else {
       if (!b64Coff.value) { appendLog(id, '[err] paste base64 COFF'); return }
-      appendLog(id, `>> run raw COFF (args=${argsText.value || '<none>'})`)
+      appendLog(id, `>> run raw COFF (args=${argsDesc()})`)
       await RunBofByB64(id, b64Coff.value.trim(), argsB64())
     }
   } catch (e: any) {
@@ -178,7 +208,19 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
             <option v-for="b in bofs" :key="b.name" :value="b.name">{{ b.name }}</option>
           </select>
           <input v-else v-model="b64Coff" placeholder="base64 COFF…" class="b64" />
-          <input v-model="argsText" placeholder="args (text → b64, optional)" class="args" />
+
+          <span class="args-label">args:</span>
+          <select v-model="argsSrc" class="args-sel">
+            <option value="none">none</option>
+            <option value="text">text</option>
+            <option value="file">file (.bin)</option>
+          </select>
+          <input v-if="argsSrc==='text'" v-model="argsText" placeholder="text args → b64"
+                 class="args" />
+          <button v-if="argsSrc==='file'" @click="pickArgsFile" class="args-file">
+            {{ argsFileName || 'choose .bin…' }}
+          </button>
+
           <button class="primary" @click="doRun">run</button>
         </div>
 
@@ -226,10 +268,12 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
 
 .runbar { display: flex; gap: 8px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
 .seg { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 3px; }
-.sel, .b64, .args { font-size: 12px; }
-.sel { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 5px; }
+.sel, .b64, .args, .args-sel { font-size: 12px; }
+.sel, .args-sel { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 5px; }
 .b64 { flex: 1; min-width: 200px; }
 .args { width: 220px; }
+.args-label { color: var(--muted); font-size: 11px; }
+.args-file { font-family: var(--mono); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 
 .output { flex: 1; overflow-y: auto; padding: 10px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.5; background: var(--bg); }
 .line { white-space: pre-wrap; word-break: break-all; }

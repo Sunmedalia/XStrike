@@ -11,8 +11,8 @@
 *.exp
 
 # Local BOF arg buffers (binary, generated per-run)
+examples/*.bin
 examples/*_args.bin
-examples/nbtscan_args.bin
 
 # Editor / IDE
 .vscode/
