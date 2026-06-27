@@ -34,17 +34,19 @@ pub fn append_external_note(s: &str) {
     OUTPUT.with(|c| c.borrow_mut().push_str(s));
 }
 
-// ---- datap struct (CS beacon.h layout, x64) ----
-//   char *original;  // +0
-//   int   size;      // +8
-//   int   length;    // +12
-//   char *buffer;    // +16
-// total 24 bytes. BOFs include their own beacon.h defining this layout.
+// ---- datap struct (Cobalt Strike 4.x beacon.h layout, x64) ----
+//   char *original;  // +0   the original buffer [so we can free it]
+//   char *buffer;    // +8   current pointer into our buffer
+//   int   length;    // +16  remaining length of data
+//   int   size;      // +20  total size of this buffer
+// total 24 bytes. This MUST match the `datap` a BOF compiles against (CS 4.x
+// / AdaptixC2 Extension-Kit). The earlier RustStrike-only layout
+// (original/size/length/buffer) was non-standard and broke real BOFs.
 
 const DATAP_ORIG: usize = 0;
-const DATAP_SIZE: usize = 8;
-const DATAP_LEN: usize = 12;
-const DATAP_BUF: usize = 16;
+const DATAP_BUF: usize = 8;
+const DATAP_LEN: usize = 16;
+const DATAP_SIZE: usize = 20;
 
 unsafe fn write_ptr(cell: *mut u8, off: usize, val: *const u8) {
     (cell.add(off) as *mut *const u8).write_unaligned(val);

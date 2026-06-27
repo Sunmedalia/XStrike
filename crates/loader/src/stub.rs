@@ -6,6 +6,6 @@
 
 use anyhow::Result;
 
-pub fn run_bof(_coff_bytes: &[u8], _args: &str) -> Result<String> {
+pub fn run_bof(_coff_bytes: &[u8], _args: &[u8]) -> Result<String> {
     anyhow::bail!("ruststrike-loader can only execute BOFs on Windows x64")
 }

@@ -2,11 +2,12 @@
  * Minimal Beacon API declarations matching ruststrike-loader's stubs.
  *
  * This header is what a BOF #includes to call Beacon* APIs. The `datap`
- * struct layout MUST match the loader's (see crates/loader/src/beacon.rs):
+ * struct layout MUST match the loader's (see crates/loader/src/beacon.rs) and
+ * follows the Cobalt Strike 4.x layout:
  *   char *original;  // +0
- *   int   size;      // +8
- *   int   length;    // +12
- *   char *buffer;    // +16
+ *   char *buffer;    // +8   current pointer
+ *   int   length;    // +16  remaining length
+ *   int   size;      // +20  total size
  */
 #ifndef _BEACON_H
 #define _BEACON_H
@@ -20,9 +21,9 @@
 
 typedef struct {
     char *original;
-    int   size;
-    int   length;
     char *buffer;
+    int   length;
+    int   size;
 } datap;
 
 void  BeaconDataParse(datap *parser, char *buffer, int size);

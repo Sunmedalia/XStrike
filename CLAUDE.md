@@ -64,6 +64,29 @@ The `datap` struct layout in **`examples/beacon.h`** (offsets original=0, size=8
 - Executable BOF image memory is intentionally **not freed** after execution (kept for process lifetime in v1).
 - x64 only; x86 COFFs are rejected at parse time.
 
+### BOF compatibility (third-party BOFs)
+
+The loader runs Cobalt-Strike-4.x / AdaptixC2-style BOFs. Verified end-to-end
+with an AdaptixC2 [Extension-Kit](https://github.com/Adaptix-Framework/Extension-Kit)
+BOF (`SAR-BOF/nbtscan`). To use a third-party BOF:
+
+1. Build it with mingw (`x86_64-w64-mingw32-gcc`), the same toolchain whose
+   reloc numbering the loader matches (see below). Extension-Kit builds via its
+   `make` / CMake, or per-BOF: `gcc -I Extension-Kit/_include -DBOF -c bof.c -o bof.x64.o`.
+2. The BOF's externals are `__imp_LIBRARY$function` imports (kernel32/ws2_32/
+   msvcrt/…) and `__imp_Beacon*` — the loader resolves both via `LoadLibrary`/
+   `GetProcAddress` and the Beacon stubs. Any `Beacon*` API not stubbed falls
+   back to a no-op note.
+3. BOF args are **binary** (the CS packed format: big-endian length-prefixed
+   blobs + ints walked by `BeaconDataParse`/`Extract`/`Int`). Transport encodes
+   them base64. From the server console use `loadb <bof.o> <args.bin>` (reads a
+   raw arg file); `load <bof.o> [text]` is for BOFs that treat args as text.
+4. Only the data/output Beacon APIs and basic CRT are stubbed. BOFs that call
+   `BeaconUseToken`/`BeaconGetSpawnTo`/`Beacon*VirtualAlloc`/`BeaconInformation`
+   etc. will hit the no-op stub and misbehave — implement those in `beacon.rs`
+   + `build_external_map` as needed. `format`/token/spawn-inject APIs are not
+   implemented at all.
+
 ### Loader internals worth knowing (non-obvious)
 
 - **Aux records must occupy slots.** COFF symbol-table aux records are kept as
@@ -71,13 +94,24 @@ The `datap` struct layout in **`examples/beacon.h`** (offsets original=0, size=8
   indices (which index into the full on-disk table, aux included) line up with
   `Coff::symbols`. Skipping them compacts the vec and breaks every reloc. The
   lookup helpers (`find_defined`, `external_names`) skip `is_aux`.
-- **External symbols need thunks.** `VirtualAlloc` routinely returns BOF image
-  memory > 2 GB from the implant's code, so a BOF's 32-bit-relative `call`/
-  `jmp`/`lea` to an external (e.g. `BeaconPrintf`) cannot span the distance —
-  the REL32 displacement truncates and the call jumps into unmapped memory.
-  `run_bof` therefore writes one in-image thunk (`jmp [rip+0]; <8-byte abs
-  target>`) per external and points REL32 fixups at the thunk. Section-symbol
-  targets (e.g. `lea` to `.rdata`) are in-image already and need no thunk.
+- **External symbols need in-image slots.** `VirtualAlloc` routinely returns
+  BOF image memory > 2 GB from the implant's code, so a BOF's 32-bit-relative
+  reference to an external (e.g. `BeaconPrintf`) cannot span the distance — the
+  REL32 displacement truncates and jumps into unmapped memory. `run_bof` writes
+  one in-image slot per external and points REL32 fixups at it. Two slot kinds,
+  chosen by symbol name:
+  - `__imp_NAME` (mingw import pointer — how AdaptixC2 Extension-Kit / CS-style
+    BOFs reference imports): the BOF does `mov rax,[rip+disp]; call rax`, so
+    `disp` must land on an **8-byte cell holding the function address** (a data
+    pointer, not code). `resolve_symbol` strips the `__imp_` prefix first.
+  - plain `NAME` (direct call): the BOF does `call rel32`, so the slot must be
+    **executable** — a `jmp [rip+0]; <8-byte abs target>` thunk.
+  Section-symbol targets (e.g. `lea` to `.rdata`) are in-image already and need
+  no slot.
+- **`datap` layout is Cobalt Strike 4.x.** `beacon.rs` uses the CS 4.x `datap`
+  layout (`original`+0, `buffer`+8, `length`+16, `size`+20). `examples/beacon.h`
+  matches. An earlier RustStrike-only layout (original/size/length/buffer) was
+  non-standard and broke real BOFs — keep these in sync with CS.
 - **Toolchain reloc-type numbering.** The mingw/binutils-2.46 toolchain
   (`x86_64-w64-mingw32-gcc`) emits AMD64 relocation type values **shifted +1
   from Microsoft's winnt.h**: it writes `3` for ADDR32NB and `4` for REL32

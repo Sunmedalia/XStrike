@@ -10,6 +10,10 @@
 *.pdb
 *.exp
 
+# Local BOF arg buffers (binary, generated per-run)
+examples/*_args.bin
+examples/nbtscan_args.bin
+
 # Editor / IDE
 .vscode/
 .idea/

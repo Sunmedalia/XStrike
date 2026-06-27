@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 pub enum ServerMessage {
     /// Operator typed `hello` — link check. Implant echoes back.
     Hello,
-    /// Load & execute a BOF (COFF bytes are base64-encoded).
+    /// Load & execute a BOF. `file` is the COFF bytes and `args` is the raw BOF
+    /// argument buffer — both base64-encoded (args is binary, not text: the
+    /// CS/AdaptixC2 packed format walked by BeaconDataParse/Extract/Int).
     Bof { file: String, args: String },
 }
 

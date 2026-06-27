@@ -58,7 +58,7 @@ fn main() -> Result<()> {
             Some(m) => m,
             None => {
                 eprintln!("[server] unknown command: {cmd:?}");
-                eprintln!("  commands: hello | load <path> [args...] | quit");
+                eprintln!("  commands: hello | load <bof.o> [text args...] | loadb <bof.o> <args.bin> | quit");
                 continue;
             }
         };
@@ -86,12 +86,29 @@ fn parse_command(cmd: &str) -> Option<ServerMessage> {
     match parts.next()? {
         "hello" => Some(ServerMessage::Hello),
         "load" => {
+            // `load <bof.o> [text args...]` — args is treated as a UTF-8 string
+            // (works for BOFs that parse args as plain text). The bytes are
+            // base64-encoded for transport.
             let path = parts.next()?;
             let args = parts.collect::<Vec<_>>().join(" ");
             let bytes = std::fs::read(path).ok()?;
             Some(ServerMessage::Bof {
                 file: encode_bof(&bytes),
-                args,
+                args: encode_bof(args.as_bytes()),
+            })
+        }
+        "loadb" => {
+            // `loadb <bof.o> <args.bin>` — load a BOF with a raw binary argument
+            // buffer (the CS/AdaptixC2 packed format) read from a file. Use this
+            // for BOFs whose `go()` walks args via BeaconDataExtract/Int.
+            let mut rest = parts;
+            let path = rest.next()?;
+            let args_path = rest.next()?;
+            let bytes = std::fs::read(path).ok()?;
+            let args_bytes = std::fs::read(args_path).unwrap_or_default();
+            Some(ServerMessage::Bof {
+                file: encode_bof(&bytes),
+                args: encode_bof(&args_bytes),
             })
         }
         _ => None,
@@ -169,7 +186,8 @@ mod tests {
 
     #[test]
     fn load_command_packages_bytes() {
-        // Write a temp file with known bytes, ensure `load` base64-encodes them.
+        // Write a temp file with known bytes, ensure `load` base64-encodes both
+        // the COFF and the text args.
         let tmp = std::env::temp_dir().join("ruststrike_load_test.bin");
         let raw = vec![0xDE, 0xAD, 0xBE, 0xEF];
         std::fs::write(&tmp, &raw).unwrap();
@@ -177,12 +195,34 @@ mod tests {
         let m = parse_command(&cmd).expect("parse");
         match m {
             ServerMessage::Bof { file, args } => {
-                assert_eq!(args, "some args");
                 assert_eq!(decode_bof(&file).unwrap(), raw);
+                assert_eq!(decode_bof(&args).unwrap(), b"some args");
             }
             _ => panic!("expected bof"),
         }
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn loadb_command_packages_binary_args() {
+        // `loadb` reads binary args from a file and base64-encodes them verbatim.
+        let bof_tmp = std::env::temp_dir().join("ruststrike_loadb_bof.bin");
+        let args_tmp = std::env::temp_dir().join("ruststrike_loadb_args.bin");
+        let bof_raw = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let args_raw = vec![0x00, 0x00, 0x00, 0x09, b'1', b'2', b'7', b'.', b'0', b'.', b'0', b'.', b'1'];
+        std::fs::write(&bof_tmp, &bof_raw).unwrap();
+        std::fs::write(&args_tmp, &args_raw).unwrap();
+        let cmd = format!("loadb {} {}", bof_tmp.to_str().unwrap(), args_tmp.to_str().unwrap());
+        let m = parse_command(&cmd).expect("parse");
+        match m {
+            ServerMessage::Bof { file, args } => {
+                assert_eq!(decode_bof(&file).unwrap(), bof_raw);
+                assert_eq!(decode_bof(&args).unwrap(), args_raw);
+            }
+            _ => panic!("expected bof"),
+        }
+        let _ = std::fs::remove_file(&bof_tmp);
+        let _ = std::fs::remove_file(&args_tmp);
     }
 
     #[test]

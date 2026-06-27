@@ -283,3 +283,27 @@ mod tests {
         assert!(!coff.sections.is_empty(), "must have at least one section");
     }
 }
+
+#[cfg(test)]
+mod real_bof_tests {
+    use super::*;
+    use std::path::Path;
+    /// A real AdaptixC2 Extension-Kit BOF (nbtscan) built with mingw uses
+    /// `__imp_LIBRARY$function` imports. Verify the parser surfaces them as
+    /// externals (the loader strips `__imp_` at resolve time).
+    #[test]
+    fn parses_real_bof_with_imp_imports() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/nbtscan.x64.o");
+        let bytes = match std::fs::read(&p) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/nbtscan.x64.o not built"); return; }
+        };
+        let coff = parse(&bytes).expect("parse");
+        assert_eq!(coff.machine, IMAGE_FILE_MACHINE_AMD64);
+        assert!(coff.find_defined("go").is_some(), "go entry must be present");
+        let exts = coff.external_names();
+        assert!(exts.iter().any(|n| n.contains("BeaconPrintf")), "expected BeaconPrintf, got {exts:?}");
+        assert!(exts.iter().any(|n| n.starts_with("__imp_")), "expected __imp_ imports, got {exts:?}");
+        assert!(exts.iter().any(|n| n.contains("KERNEL32$")), "expected KERNEL32$ import, got {exts:?}");
+    }
+}

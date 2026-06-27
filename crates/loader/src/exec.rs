@@ -83,7 +83,12 @@ fn align16(n: usize) -> usize {
 const THUNK_SIZE: usize = 16;
 
 /// Load + execute a BOF. Returns the text captured from Beacon* output.
-pub fn run_bof(coff_bytes: &[u8], args: &str) -> Result<String> {
+///
+/// `args` is the **raw BOF argument buffer** passed verbatim to `go(args, len)`
+/// — i.e. the CS/AdaptixC2 packed format (big-endian length-prefixed blobs and
+/// integers that `BeaconDataParse`/`BeaconDataExtract`/`BeaconDataInt` walk).
+/// It is binary, not text; do not treat it as a C string.
+pub fn run_bof(coff_bytes: &[u8], args: &[u8]) -> Result<String> {
     let parsed = coff::parse(coff_bytes).context("parsing COFF")?;
     beacon::reset_output();
 
@@ -91,22 +96,28 @@ pub fn run_bof(coff_bytes: &[u8], args: &str) -> Result<String> {
     ensure!(sections_size > 0, "BOF has no loadable sections");
 
     // Resolve every external (undefined) symbol to its real address up front,
-    // and lay out one in-image thunk per external. The thunk lets a BOF's
-    // 32-bit-relative `call`/`jmp`/`lea` reach an external even when it lands
-    // far away (VirtualAlloc routinely returns memory > 2 GB from our code,
-    // which a REL32 displacement cannot span). The thunk sits inside the
-    // allocated image, so the REL32 reaches it; the thunk then jumps to the
-    // real (64-bit absolute) target.
+    // and lay out one in-image slot per external so a BOF's 32-bit-relative
+    // reference can reach it even when the real target is >2 GB away
+    // (VirtualAlloc routinely returns image memory far from our code, which a
+    // REL32 displacement cannot span).
+    //
+    // Two slot kinds are needed, chosen by how the BOF references the symbol:
+    //  * `__imp_NAME` (mingw import pointer): the BOF does
+    //    `mov rax,[rip+disp]; call rax` — `disp` must point at an 8-byte cell
+    //    holding the *function address*. Slot = a raw 8-byte pointer.
+    //  * plain `NAME` (direct call): the BOF does `call rel32` (or
+    //    `jmp`/`lea`) — the fixup target must be *executable* code that jumps
+    //    to the function. Slot = a `jmp [rip+0]; <8-byte abs target>` thunk.
     let externals = build_external_map();
     let ext_slots = resolve_external_slots(&parsed, &externals);
-    let thunk_count = ext_slots.len();
-    let thunk_region = align16(thunk_count * THUNK_SIZE);
-    let alloc_size = sections_size.checked_add(thunk_region)
-        .ok_or_else(|| anyhow::anyhow!("image + thunks size overflow"))?;
-    let thunk_base_off = sections_size;
+    let slot_count = ext_slots.len();
+    let slot_region = align16(slot_count * THUNK_SIZE);
+    let alloc_size = sections_size.checked_add(slot_region)
+        .ok_or_else(|| anyhow::anyhow!("image + slots size overflow"))?;
+    let slot_base_off = sections_size;
 
     unsafe {
-        // Executable + writable buffer for the whole image + thunks.
+        // Executable + writable buffer for the whole image + slots.
         let base = VirtualAlloc(std::ptr::null(), alloc_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
         if base.is_null() {
             bail!("VirtualAlloc failed for image (size={alloc_size})");
@@ -118,13 +129,21 @@ pub fn run_bof(coff_bytes: &[u8], args: &str) -> Result<String> {
         // process lifetime — v1 does not free executable BOF memory.)
         let cleanup = || { let _ = VirtualFree(base as *mut _, 0, MEM_RELEASE); };
 
-        // Write thunks: sym_idx -> thunk VA. Built before relocation so the
+        // Write slots: sym_idx -> slot VA. Built before relocation so the
         // target addresses are available to the REL32 fixups.
-        let mut thunk_va: HashMap<u32, usize> = HashMap::with_capacity(thunk_count);
+        let mut thunk_va: HashMap<u32, usize> = HashMap::with_capacity(slot_count);
         for (i, &(sym_idx, real)) in ext_slots.iter().enumerate() {
-            let off = thunk_base_off + i * THUNK_SIZE;
-            thunk_va.insert(sym_idx, base_usize + off);
-            write_thunk(base.add(off), real);
+            let off = slot_base_off + i * THUNK_SIZE;
+            let slot_va = base_usize + off;
+            let sym = &parsed.symbols[sym_idx as usize];
+            // `__imp_` symbols want a pointer cell (loaded then called); plain
+            // symbols want an executable jump thunk (called directly).
+            if sym.name.starts_with("__imp_") {
+                write_ptr_slot(base.add(off), real);
+            } else {
+                write_thunk(base.add(off), real);
+            }
+            thunk_va.insert(sym_idx, slot_va);
         }
 
         if let Err(e) = load_into(&parsed, coff_bytes, base, base_usize, &thunk_va) {
@@ -141,13 +160,12 @@ pub fn run_bof(coff_bytes: &[u8], args: &str) -> Result<String> {
         };
 
         // Prepare args buffer in writable memory.
-        let args_bytes = args.as_bytes();
-        let mut args_buf = vec![0u8; args_bytes.len().max(1)];
-        if !args_bytes.is_empty() {
-            args_buf[..args_bytes.len()].copy_from_slice(args_bytes);
+        let mut args_buf = vec![0u8; args.len().max(1)];
+        if !args.is_empty() {
+            args_buf[..args.len()].copy_from_slice(args);
         }
         let args_ptr = args_buf.as_ptr();
-        let args_len = args_bytes.len() as i32;
+        let args_len = args.len() as i32;
 
         let go_fn: extern "C" fn(*const u8, i32) = std::mem::transmute(go);
 
@@ -171,6 +189,17 @@ unsafe fn write_thunk(dst: *mut u8, target: usize) {
     std::ptr::copy_nonoverlapping(
         (target as u64).to_le_bytes().as_ptr(),
         dst.add(6),
+        8,
+    );
+}
+
+/// Write an 8-byte pointer cell at `dst` holding `target`. For `__imp_` symbols
+/// the BOF does `mov rax,[rip+disp]; call rax`, so `disp` must land on a cell
+/// containing the function address (not executable code).
+unsafe fn write_ptr_slot(dst: *mut u8, target: usize) {
+    std::ptr::copy_nonoverlapping(
+        (target as u64).to_le_bytes().as_ptr(),
+        dst,
         8,
     );
 }
@@ -260,11 +289,18 @@ fn resolve_symbol(
             if sym.name.is_empty() {
                 return Ok(0);
             }
-            if let Some(addr) = externals.get(sym.name.as_str()) {
+            // mingw marks imported functions with a leading `__imp_` (e.g.
+            // `__imp_KERNEL32$CloseHandle`, `__imp_BeaconPrintf`). That prefix
+            // names the import-pointer slot, not the function; strip it so the
+            // rest of resolution treats it as the plain `LIBRARY$function` /
+            // Beacon / CRT name. Without this, AdaptixC2/CS-style BOFs (built
+            // with DECLSPEC_IMPORT) fail to resolve every external.
+            let name = sym.name.strip_prefix("__imp_").unwrap_or(&sym.name);
+            if let Some(addr) = externals.get(name) {
                 return Ok(*addr);
             }
             // Try LIBRARY$function form and plain-name DLL lookup.
-            if let Some(addr) = resolve_external_by_name(&sym.name) {
+            if let Some(addr) = resolve_external_by_name(name) {
                 return Ok(addr);
             }
             bail!("unresolved external symbol: {}", sym.name);
@@ -471,7 +507,33 @@ mod tests {
                 return;
             }
         };
-        let out = run_bof(&bytes, "").expect("run_bof should succeed");
+        let out = run_bof(&bytes, &[]).expect("run_bof should succeed");
         assert!(out.contains("hello from bof"), "got: {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod nbtscan_tests {
+    use super::*;
+    use std::path::Path;
+    /// Loads a real third-party BOF (AdaptixC2 Extension-Kit nbtscan) built with
+    /// mingw `__imp_LIBRARY$function` imports + binary CS-format args, proving the
+    /// loader resolves `__imp_`-prefixed externals and passes raw arg buffers.
+    /// Requires examples/nbtscan.x64.o and examples/nbtscan_args.bin.
+    #[test]
+    fn run_nbtscan() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/nbtscan.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/nbtscan.x64.o not built"); return; }
+        };
+        let args = match std::fs::read(dir.join("../../examples/nbtscan_args.bin")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/nbtscan_args.bin not built"); return; }
+        };
+        match run_bof(&bof, &args) {
+            Ok(o) => eprintln!("NBTSCAN OK:\n{o}"),
+            Err(e) => panic!("NBTSCAN ERR: {e:#}"),
+        }
     }
 }
