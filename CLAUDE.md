@@ -68,6 +68,20 @@ The protocol is newline-delimited JSON over a single TCP stream. `crates/protoco
 - Each message is one line terminated by `\n`. Implant output can be large — use a generous line buffer.
 - A reference Go server lives in `clients/go-server/` and is verified to drive the Rust implant (hello + load + loadb, incl. the Extension-Kit nbtscan BOF).
 
+### Go service core (`clients/go-server/`)
+
+A standalone operator-facing service (step C of the multi-language plan; the GUI in step B talks to this). Two listeners:
+- **TCP** (default `:4444`) — implant transport, same newline-JSON wire contract.
+- **HTTP/WS** (default `:8091`) — REST + WebSocket for the GUI.
+
+Run: `go-server [tcp-port] [http-port]`. BOF library dir: `RUSTSTRIKE_BOFS` env, else `./bofs` next to the exe. Build: `cd clients/go-server && go build`.
+
+Files: `session.go` (multi-implant session manager, one reader goroutine each), `bus.go` (event pub/sub), `ws.go` (dependency-free RFC6455 server, pushes `Event`s), `api.go` (REST), `boflib.go`+`boflib_api.go` (BOF library index + upload/run), `protocol.go` (wire types mirroring `crates/protocol`).
+
+REST: `GET /api/implants`, `POST /api/implants/{id}/hello`, `POST /api/implants/{id}/bof` (body `{bof, args}` — `bof` is a library name or raw base64 COFF, `args` base64), `DELETE /api/implants/{id}`, `GET/POST /api/bofs`, `POST /api/bofs/{name}/run?implant=<id>` (body `{args}`). WS: `GET /ws` streams `{type, implant_id, data}` events (`implant_connected`/`implant_disconnected`/`hello`/`output`/`error`).
+
+Verified end-to-end with the Rust implant: session list, hello, BOF-by-b64, BOF-by-name (nbtscan), and live WebSocket event push all work.
+
 ### v1 limitations to respect when extending
 
 - `BeaconPrintf` captures only the **first two variadic args** (x64 r8/r9); further specifiers emit literally. The `format_bof` interpreter handles `%d %i %u %x %X %s %c %p`.
