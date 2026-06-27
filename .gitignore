@@ -24,3 +24,9 @@ examples/*_args.bin
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Vendored third-party BOF kits (cloned locally, not part of this repo)
+/Extension-Kit/
+
+# Local goal/task scratch files
+goal.md

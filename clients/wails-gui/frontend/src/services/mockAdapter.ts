@@ -1,0 +1,353 @@
+/**
+ * Unified axios adapter: mock (demo) OR real (Wails desktop) backend.
+ *
+ * Installed on the shared axios instance in services/api.ts. Every request the
+ * Ghost UI makes (`api.get/post/...`) lands here. We branch on mode:
+ *
+ *   - mock  → answer from services/mockData.ts (browser demo / `?demo=1`)
+ *   - real  → call the Wails Go bindings (services/wailsBindings), which proxy
+ *             the Go service core, which drives the real Rust implant.
+ *
+ * This lets the entire existing UI (stores, command registry, Terminal, modals)
+ * run unchanged against the real backend — only the transport is swapped. The
+ * `{ success, data, error }` envelope is preserved so the response interceptor
+ * in api.ts (toasts, 401 redirect) keeps working.
+ *
+ * Real-mode mapping (Ghost UI endpoint → RustStrike):
+ *   GET  /nodes            → ListImplants()            (sparse beacon shape)
+ *   GET  /listeners        → []                         (no listener concept)
+ *   GET  /bof              → ListBofs()
+ *   GET  /bof/commands     → synthesise BofCommandMeta from ListBofs
+ *   GET  /logs             → client-side realBackend log buffer (fed by events)
+ *   POST /bof/execute      → RunBofByName()  → returns task id
+ *   GET  /tasks/{id}       → GetTaskResult() → {status, output} (null while running)
+ *   POST /bof/upload       → UploadBof()
+ *   POST /nodes/{id}/stop|delete, /nodes/batch/* → DropImplant()
+ *   POST /auth/login       → demo token (no auth in RustStrike)
+ *   POST /logs (audit)     → swallowed (client-side only)
+ */
+
+import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios'
+import { isMockMode, MOCK_TOKEN } from './mockMode'
+import {
+  mockBeacons,
+  mockListeners,
+  mockBofs,
+  mockEventLog,
+  pushMockEvent,
+  MOCK_LATENCY_MS,
+} from './mockData'
+import * as Wails from './wailsBindings'
+import { getRealLogs, pushRealLog, eventToLog } from './realBackend'
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+function delay(ms: number) {
+  return new Promise<void>((r) => setTimeout(r, ms))
+}
+
+/** Strip protocol/host and `/api` prefix; drop query string. Return bare path. */
+function toApiPath(url: string | undefined): string {
+  if (!url) return ''
+  let u = url
+  const i = u.indexOf('/api')
+  if (i >= 0) u = u.slice(i + 4)
+  if (!u.startsWith('/')) u = '/' + u
+  return u.split('?')[0]
+}
+
+function ok(config: AxiosRequestConfig, data: unknown, status = 200): AxiosResponse {
+  return { data, status, statusText: 'OK', headers: {}, config } as AxiosResponse
+}
+
+/** Reject with an axios-like error so the interceptor honours `silentError`. */
+function fail(config: AxiosRequestConfig, message: string, status = 500): never {
+  const e: any = new Error(message)
+  e.config = config
+  e.response = { data: { success: false, error: message }, status, statusText: 'Error', headers: {}, config }
+  throw e
+}
+
+function parseBody(config: AxiosRequestConfig): any {
+  const d = config.data
+  if (d == null) return {}
+  if (typeof d === 'string') {
+    try { return JSON.parse(d) } catch { return {} }
+  }
+  return d
+}
+
+function bytesToB64(bytes: number[] | undefined): string {
+  if (!bytes || !bytes.length) return ''
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i] & 0xff)
+  return btoa(bin)
+}
+
+// ---------------------------------------------------------------------------
+// real-mode beacon mapping
+// ---------------------------------------------------------------------------
+
+function implantToBeacon(im: Wails.WailsImplant): any {
+  const id = String(im.id)
+  let lastSeen = 0
+  try { lastSeen = Math.floor(new Date(im.since).getTime() / 1000) } catch { lastSeen = Math.floor(Date.now() / 1000) }
+  // RustStrike implants expose only id + addr. Surface addr as hostname/ip; the
+  // rest is unknown until a recon BOF populates it (v1 leaves it sparse).
+  return {
+    engine: 'windows',
+    node_id: id,
+    id,
+    hostname: im.addr,
+    computer: im.addr,
+    ip: im.addr,
+    internal_ip: im.addr,
+    external_ip: '-',
+    process: '-',
+    process_name: '-',
+    pid: 0,
+    os: '-',
+    os_version: '-',
+    arch: '-',
+    user: '-',
+    domain: '-',
+    privilege: 'User',
+    integrity: 1,
+    last_seen: lastSeen,
+    listener: 'tcp',
+    checkin_interval: 30,
+    started_at: lastSeen,
+    cwd: '-',
+    selected: false,
+  }
+}
+
+/** Synthesise console-command metadata for the BOF library. */
+function bofCommandMetas(bofs: { name: string }[]): any[] {
+  // Per-BOF arg encoding. RustStrike BOFs take RAW bytes (no length prefix):
+  // a single string arg is its UTF-8 bytes. The `raw_string` encoder (see
+  // commandRegistry) produces exactly that. `none` = no args.
+  const enc: Record<string, { encode_type: string; aliases?: string; description?: string }> = {
+    cmd_exec: { encode_type: 'raw_string', aliases: 'sh,shell,run', description: 'Run a cmd.exe command' },
+    ps: { encode_type: 'none', description: 'List processes' },
+    ls: { encode_type: 'raw_string', aliases: 'dir', description: 'List directory (optional path)' },
+    download: { encode_type: 'raw_string', description: 'Download a file (base64 output)' },
+    hello: { encode_type: 'none', description: 'Link check' },
+  }
+  return bofs.map((b) => {
+    const cfg = enc[b.name] || { encode_type: 'none' }
+    return {
+      bof_name: b.name,
+      cmd_name: b.name,
+      aliases: cfg.aliases || '',
+      description: cfg.description || `Run BOF ${b.name}`,
+      category: 'bof',
+      args_json: cfg.encode_type === 'none' ? [] : [{ name: 'arg', type: 'string', required: false }],
+      encode_type: cfg.encode_type,
+      destructive: false,
+      help_extra: '',
+      enabled: true,
+      plugin_name: '',
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// real-mode request dispatch
+// ---------------------------------------------------------------------------
+
+async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
+  const method = (config.method || 'get').toLowerCase()
+  const path = toApiPath(config.url)
+
+  // ── auth (no real auth; just pass the guard) ────────────────────────────
+  if (method === 'post' && path === '/auth/login') return ok(config, { success: true, data: { token: MOCK_TOKEN } })
+  if (method === 'post' && path === '/auth/ticket') return ok(config, { success: true, data: 'real-no-ticket' })
+  if (method === 'post' && path === '/auth/logout') return ok(config, { success: true, data: {} })
+
+  // ── sessions ────────────────────────────────────────────────────────────
+  if (method === 'get' && path === '/nodes') {
+    const implants = await Wails.ListImplants()
+    return ok(config, { success: true, data: implants.map(implantToBeacon) })
+  }
+  if (method === 'get' && path === '/listeners') {
+    return ok(config, { success: true, data: [] })
+  }
+  if ((method === 'post' || method === 'delete') && path.startsWith('/nodes/')) {
+    // /nodes/{id} | /nodes/{id}/stop | /nodes/{id}/delete
+    const idStr = path.split('/')[2]
+    const id = Number(idStr)
+    if (id) await Wails.DropImplant(id)
+    return ok(config, { success: true, data: {} })
+  }
+  if (method === 'post' && path.startsWith('/nodes/batch/')) {
+    const body = parseBody(config)
+    const ids: any[] = body?.ids || body?.node_ids || []
+    for (const id of ids) {
+      const n = Number(typeof id === 'object' ? id?.node_id : id)
+      if (n) { try { await Wails.DropImplant(n) } catch { /* continue */ } }
+    }
+    return ok(config, { success: true, data: {} })
+  }
+
+  // ── BOFs ────────────────────────────────────────────────────────────────
+  if (method === 'get' && path === '/bof') {
+    const bofs = await Wails.ListBofs()
+    return ok(config, { success: true, data: bofs.map((b) => ({ ...b, plugin_name: '' })) })
+  }
+  if (method === 'get' && path === '/bof/commands') {
+    const bofs = await Wails.ListBofs()
+    return ok(config, { success: true, data: bofCommandMetas(bofs) })
+  }
+  if (method === 'post' && path === '/bof/execute') {
+    const body = parseBody(config)
+    const id = Number(body?.node_id)
+    if (!id) fail(config, 'no target session selected')
+    const argsB64 = bytesToB64(body?.args)
+    let taskId: string
+    if (body?.bof_b64) {
+      taskId = await Wails.RunBofByB64(id, body.bof_b64, argsB64)
+    } else {
+      taskId = await Wails.RunBofByName(id, String(body?.bof_name || ''), argsB64)
+    }
+    pushRealLog({ created_at: Math.floor(Date.now() / 1000), level: 'task', node_id: String(id), data: `>> ${body?.bof_name || 'bof'} queued` })
+    return ok(config, { success: true, data: taskId })
+  }
+  if (method === 'post' && path === '/bof/upload') {
+    const { name, b64 } = await extractUpload(config)
+    if (!name) fail(config, 'BOF name required')
+    await Wails.UploadBof(name, b64)
+    return ok(config, { success: true, data: { name } })
+  }
+  if (method === 'delete' && path.startsWith('/bof/')) {
+    // BOF deletion isn't exposed by the core; report success silently.
+    return ok(config, { success: true, data: {} })
+  }
+
+  // ── tasks / logs ────────────────────────────────────────────────────────
+  if (method === 'get' && path.startsWith('/tasks/')) {
+    const taskId = path.split('/')[2]
+    const t = await Wails.GetTaskResult(taskId)
+    if (!t || t.status === 'running') {
+      // Not ready yet — return null data so callers keep polling.
+      return ok(config, { success: true, data: null })
+    }
+    const failed = t.status === 'failed'
+    return ok(config, { success: true, data: { output: t.output || '', error: failed ? t.output : '', success: !failed, status: t.status, id: t.id } })
+  }
+  if (method === 'get' && path === '/logs') {
+    return ok(config, { success: true, data: getRealLogs() })
+  }
+  if (method === 'get' && path === '/tasks') {
+    return ok(config, { success: true, data: [] })
+  }
+  if (method === 'post' && (path === '/logs' || path === '/tasks')) {
+    // audit/task-create logging — client-side only in real mode.
+    return ok(config, { success: true, data: {} })
+  }
+
+  // ── files (no real caller; swallow) ─────────────────────────────────────
+  if (path.startsWith('/files')) return ok(config, { success: true, data: {} })
+
+  // ── generic fallback ────────────────────────────────────────────────────
+  return ok(config, { success: true, data: {} })
+}
+
+/** Extract {name, b64} from a JSON body or multipart FormData upload. */
+async function extractUpload(config: AxiosRequestConfig): Promise<{ name: string; b64: string }> {
+  const d = config.data
+  if (d && typeof d === 'object' && !(d instanceof FormData)) {
+    const body = d as any
+    if (body.file_b64) return { name: body.name || '', b64: body.file_b64 }
+    if (body.file instanceof Blob) {
+      const buf = await body.file.arrayBuffer()
+      return { name: body.name || '', b64: blobToB64(new Uint8Array(buf)) }
+    }
+  }
+  if (d instanceof FormData) {
+    let name = ''
+    let b64 = ''
+    for (const [key, val] of d.entries()) {
+      if (key === 'name' && typeof val === 'string') name = val
+      if ((key === 'file' || key === 'file_b64') && val instanceof Blob) {
+        const buf = await val.arrayBuffer()
+        b64 = blobToB64(new Uint8Array(buf))
+      } else if (key === 'file_b64' && typeof val === 'string') {
+        b64 = val
+      }
+    }
+    return { name, b64 }
+  }
+  return { name: '', b64: '' }
+}
+
+function blobToB64(bytes: Uint8Array): string {
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+  return btoa(bin)
+}
+
+// ---------------------------------------------------------------------------
+// mock-mode request dispatch
+// ---------------------------------------------------------------------------
+
+async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
+  const method = (config.method || 'get').toLowerCase()
+  const path = toApiPath(config.url)
+  await delay(method === 'get' ? MOCK_LATENCY_MS : 120)
+
+  if (method === 'post' && path === '/auth/login') return ok(config, { success: true, data: { token: MOCK_TOKEN } })
+  if (method === 'post' && path === '/auth/ticket') return ok(config, { success: true, data: 'mock-ticket-' + Math.random().toString(36).slice(2) })
+  if (method === 'post' && path === '/auth/logout') return ok(config, { success: true, data: {} })
+
+  if (method === 'get' && path === '/nodes') return ok(config, { success: true, data: mockBeacons })
+  if (method === 'get' && path === '/listeners') return ok(config, { success: true, data: mockListeners })
+  if ((method === 'post' || method === 'delete') && path.startsWith('/nodes/')) {
+    const id = path.split('/')[2]
+    pushMockEvent('warn', id || '-', `Session ${id} terminated by operator`)
+    return ok(config, { success: true, data: {} })
+  }
+
+  if (method === 'get' && path === '/bof') return ok(config, { success: true, data: mockBofs })
+  if (method === 'get' && path === '/bof/commands') return ok(config, { success: true, data: bofCommandMetas(mockBofs) })
+  if (method === 'post' && path === '/bof/execute') {
+    const body = parseBody(config)
+    const node = body?.node_id || '-'
+    pushMockEvent('task', String(node), `${body?.bof_name || 'bof'} queued on ${node}`)
+    return ok(config, { success: true, data: 't-' + Math.random().toString(36).slice(2, 8) })
+  }
+  if (method === 'post' && path === '/bof/upload') {
+    pushMockEvent('info', '-', 'BOF uploaded to library')
+    return ok(config, { success: true, data: {} })
+  }
+
+  if (method === 'get' && path.startsWith('/tasks/')) {
+    // mock: immediately "complete" with a canned result
+    return ok(config, { success: true, data: { output: '(mock) command executed', error: '', success: true, status: 'completed' } })
+  }
+  if (method === 'get' && path === '/logs') return ok(config, { success: true, data: mockEventLog })
+  if (method === 'post' && (path === '/logs' || path === '/tasks' || path.startsWith('/files'))) return ok(config, { success: true, data: {} })
+
+  return ok(config, { success: true, data: {} })
+}
+
+// ---------------------------------------------------------------------------
+// install
+// ---------------------------------------------------------------------------
+
+export function installBackendAdapter(api: AxiosInstance) {
+  api.defaults.adapter = async (config: AxiosRequestConfig): Promise<AxiosResponse> => {
+    try {
+      if (isMockMode()) return await mockHandle(config)
+      return await realHandle(config)
+    } catch (e: any) {
+      if (e?.response || e?.config) throw e
+      fail(config, e?.message || 'request failed')
+    }
+  }
+}
+
+/** Used by the core:event subscriber to push real-mode events into the log. */
+export { pushRealLog, eventToLog }

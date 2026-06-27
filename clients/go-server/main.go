@@ -36,6 +36,7 @@ var (
 	manager *SessionManager
 	bus     *EventBus
 	boflib  *BofLib
+	tasks   *TaskStore
 	logMu   sync.Mutex
 	logOut  io.Writer = os.Stderr
 )
@@ -55,6 +56,8 @@ func main() {
 
 	bus = NewEventBus()
 	manager = NewSessionManager(bus)
+	tasks = NewTaskStore()
+	tasks.StartReaper()
 	// BOF library dir: RUSTSTRIKE_BOFS env var, else ./bofs next to the exe
 	// (so it works regardless of the current working directory).
 	bofDir := os.Getenv("RUSTSTRIKE_BOFS")
