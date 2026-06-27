@@ -571,8 +571,9 @@ mod nbtscan_tests {
 mod cmd_exec_tests {
     use super::*;
     use std::path::Path;
-    /// Runs the cmd_exec BOF with `whoami` and checks the output contains the
-    /// current user. Requires examples/cmd_exec.x64.o + cmd_exec_whoami.bin.
+    /// Runs the cmd_exec BOF with a plain-text `whoami` command (no .bin file
+    /// — the BOF takes the raw args buffer as text). Requires
+    /// examples/cmd_exec.x64.o built.
     #[test]
     fn run_cmd_exec_whoami() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -580,13 +581,8 @@ mod cmd_exec_tests {
             Ok(b) => b,
             Err(_) => { eprintln!("skipping: examples/cmd_exec.x64.o not built"); return; }
         };
-        let args = match std::fs::read(dir.join("../../examples/cmd_exec_whoami.bin")) {
-            Ok(b) => b,
-            Err(_) => { eprintln!("skipping: examples/cmd_exec_whoami.bin not built"); return; }
-        };
-        let out = run_bof(&bof, &args).expect("cmd_exec should succeed");
+        let out = run_bof(&bof, b"whoami").expect("cmd_exec should succeed");
         eprintln!("CMD_EXEC OUTPUT:\n{out}");
-        // whoami prints DOMAIN\user or user; assert non-empty and no error marker.
         assert!(!out.contains("cmd_exec:"), "BOF reported error: {out}");
         assert!(out.trim().len() > 0, "expected whoami output, got empty");
     }

