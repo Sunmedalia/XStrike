@@ -82,6 +82,29 @@ REST: `GET /api/implants`, `POST /api/implants/{id}/hello`, `POST /api/implants/
 
 Verified end-to-end with the Rust implant: session list, hello, BOF-by-b64, BOF-by-name (nbtscan), and live WebSocket event push all work.
 
+### Wails GUI (`clients/wails-gui/`)
+
+Step B: a desktop operator console (Vue 3 + TS frontend, Go backend via Wails v2) that talks to the Go service core's HTTP/WS API — it holds no implant/BOF logic itself.
+
+- `app.go` — Wails-bound methods the frontend calls: `ListImplants`, `Hello`, `RunBofByName`, `RunBofByB64`, `DropImplant`, `ListBofs`, `UploadBof`. Each wraps a core REST call.
+- `core.go` — connects to the core's `/ws`, re-emits every event to the frontend as a Wails `core:event` (auto-reconnects). Core address via `RUSTSTRIKE_CORE` (default `http://127.0.0.1:8091`).
+- `frontend/src/App.vue` — dark C2-style console: left sidebar (implant list + BOF library with upload), right panel (per-implant output stream fed by WS events, run bar with library/raw-b64 mode + text args).
+
+Run dev (hot reload): `cd clients/wails-gui && wails dev`. Build single exe: `wails build` → `build/bin/wails-gui.exe`. Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
+
+Verified: Go backend + frontend TS compile clean, exe builds, and the GUI's WebSocket subscriber connects to the core (event-forwarding chain confirmed). Visual/interactive verification requires running `wails dev` on a desktop session.
+
+### Running the whole stack
+
+```sh
+# 1. Go service core (implant TCP :4444, operator HTTP/WS :8091)
+RUSTSTRIKE_BOFS=./clients/go-server/bofs ./clients/go-server/go-server.exe 4444 8091
+# 2. Rust implant (reverse-connects to core)
+./target/release/ruststrike-implant.exe 127.0.0.1 4444
+# 3. GUI (desktop console over the core's API)
+cd clients/wails-gui && wails dev   # or: build/bin/wails-gui.exe
+```
+
 ### v1 limitations to respect when extending
 
 - `BeaconPrintf` captures only the **first two variadic args** (x64 r8/r9); further specifiers emit literally. The `format_bof` interpreter handles `%d %i %u %x %X %s %c %p`.

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -61,6 +62,7 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 	// Subscribe this connection to the event bus.
 	ch := bus.Subscribe()
 	defer bus.Unsubscribe(ch)
+	fmt.Fprintf(logf(), "[core] ws subscriber connected from %s\n", r.RemoteAddr)
 
 	// Reader: drain/close on client frames (we don't expect content; ping ok).
 	go func() {
