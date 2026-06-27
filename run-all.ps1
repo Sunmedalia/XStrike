@@ -48,11 +48,13 @@ function Ensure-Built($label, $exe, $buildCmd, $buildCwd) {
 
 function Ensure-Bofs() {
   if (-not (Test-Path $bofsDir)) { New-Item -ItemType Directory -Force $bofsDir | Out-Null }
-  $have = @(Get-ChildItem -Path $bofsDir -Filter '*.x64.o' -ErrorAction SilentlyContinue)
-  if ($have.Count -ge 3) { Write-Host "[ok] BOF library has $($have.Count) BOF(s)" -ForegroundColor DarkGray; return }
-  Write-Host "[build] staging BOFs into $bofsDir..." -ForegroundColor Yellow
+  $expected = @('hello','cmd_exec','powershell_exec','winapi_exec','ps','proc_list','proc_kill','ls','file_list','download','file_download','screenshot','upload','shellcode_exec','shellcode_exec_nt')
+  $have = @(Get-ChildItem -Path $bofsDir -Filter '*.x64.o' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName })
+  $missing = $expected | Where-Object { $have -notcontains $_ }
+  if ($missing.Count -eq 0) { Write-Host "[ok] BOF library has $($have.Count) BOF(s)" -ForegroundColor DarkGray; return }
+  Write-Host "[build] staging BOFs into $bofsDir (missing: $($missing -join ', '))..." -ForegroundColor Yellow
   $examples = Join-Path $root 'examples'
-  foreach ($c in @('hello.c','cmd_exec.c','ps.c','ls.c','download.c','upload.c')) {
+  foreach ($c in @('hello.c','cmd_exec.c','powershell_exec.c','winapi_exec.c','ps.c','proc_list.c','proc_kill.c','ls.c','file_list.c','download.c','file_download.c','screenshot.c','upload.c','shellcode_exec.c','shellcode_exec_nt.c')) {
     $src = Join-Path $examples $c
     $obj = Join-Path $examples ([IO.Path]::GetFileNameWithoutExtension($c) + '.x64.o')
     if (-not (Test-Path $obj)) {

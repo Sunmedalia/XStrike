@@ -486,7 +486,7 @@ interface BofCommandMeta {
   description: string
   category: string
   args_json: string
-  encode_type: string  // none | beacon_string | raw_hex | beacon_string_multi
+  encode_type: string  // none | beacon_string | raw_string | raw_hex | raw_hex_short | beacon_string_multi
   destructive: boolean
   help_extra: string
   enabled: boolean
@@ -584,6 +584,28 @@ function buildEncoder(
           const raw = encodeRawBytes(hexStr)
           const len = raw.length
           return [len & 0xff, (len >> 8) & 0xff, (len >> 16) & 0xff, (len >> 24) & 0xff, ...raw]
+        } catch (e: any) {
+          ctx.pushLine(`Invalid hex: ${e.message}`, 'error')
+          return null
+        }
+      }
+
+      case 'raw_hex_short': {
+        // [2-byte LE length][raw bytes] — the framing ShellcodeExecutor.vue
+        // uses for shellcode_exec* (and matches the BOFs' 2-byte-LE arg reader).
+        const hexStr = argTokens.join(' ')
+        if (!hexStr) {
+          ctx.pushLine(`Usage: ${cmd_name} <hex bytes>`, 'error')
+          return null
+        }
+        try {
+          const raw = encodeRawBytes(hexStr)
+          const len = raw.length
+          if (len > 0xffff) {
+            ctx.pushLine(`Shellcode too large for 2-byte length (>65535 bytes)`, 'error')
+            return null
+          }
+          return [len & 0xff, (len >> 8) & 0xff, ...raw]
         } catch (e: any) {
           ctx.pushLine(`Invalid hex: ${e.message}`, 'error')
           return null

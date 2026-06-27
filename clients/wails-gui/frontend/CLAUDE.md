@@ -150,8 +150,19 @@ destructive commands before calling `execute`.
    - `beacon_string` → one length-prefixed (2-byte LE + null) UTF-8 string
    - `beacon_string_multi` → each token encoded separately
    - `raw_hex` → 4-byte LE length + raw bytes
+   - `raw_hex_short` → 2-byte LE length + raw bytes (ShellcodeExecutor's
+     framing for `shellcode_exec`/`shellcode_exec_nt`)
    - `raw_string` → RAW UTF-8 bytes, no length prefix (RustStrike convention:
-     `cmd_exec`, `ls`, `download` read the args buffer verbatim as text)
+     `cmd_exec`, `powershell_exec`, `ls`, `download` read the args buffer
+     verbatim as text)
+
+   The component-driven BOFs (`proc_kill`/`file_list`/`file_download`/
+   `screenshot`/`shellcode_exec*`) are looked up by name from the BOF library
+   by their respective views and driven directly via `POST /bof/execute` —
+   the components build their own args (`encodeBeaconString` / 2-byte-LE),
+   independent of this console encoder. `mockAdapter.ts::bofCommandMetas`
+   declares the `encode_type` for each BOF so the **console** path also
+   registers them with the right encoder.
 2. Each BOF becomes a `CommandDef` with `requiresTarget: true`. `clearBofCommands()`
    rebuilds the set on reload (keeps system/manage commands).
 3. Dispatch flows `bofExecute(name, encoder)` → `POST /api/bof/execute` →

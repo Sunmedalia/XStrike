@@ -587,3 +587,73 @@ mod cmd_exec_tests {
         assert!(out.trim().len() > 0, "expected whoami output, got empty");
     }
 }
+
+#[cfg(test)]
+mod component_bof_tests {
+    use super::*;
+    use std::path::Path;
+    /// Runs proc_list (no args) in-process. Proves the loader resolves the
+    /// KERNEL32$* imports the component-driven BOFs use and that the TAB-
+    /// separated NAME\tPID\tPPID\tTHREADS schema parses. Requires
+    /// examples/proc_list.x64.o built.
+    #[test]
+    fn run_proc_list() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/proc_list.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/proc_list.x64.o not built"); return; }
+        };
+        let out = run_bof(&bof, &[]).expect("proc_list should succeed");
+        eprintln!("PROC_LIST OUTPUT ({} bytes):\n{}", out.len(), &out[..out.len().min(400)]);
+        assert!(!out.contains("proc_list:"), "BOF reported error: {out}");
+        // at least one process line with 4 TAB-separated fields should be present
+        let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
+        assert!(lines.iter().any(|l| l.split('\t').count() >= 4),
+                "expected >=1 TAB-separated process line, got: {out:?}");
+    }
+
+    /// Runs file_list with the encodeBeaconString framing the frontend sends
+    /// ([2B LE len][utf8 path][null]) against C:\Windows. Proves the bstr arg
+    /// parser + FindFirstFileA path + the CWD/D\tNAME\tSIZE\tEPOCH schema.
+    /// Requires examples/file_list.x64.o built.
+    #[test]
+    fn run_file_list() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/file_list.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/file_list.x64.o not built"); return; }
+        };
+        // encodeBeaconString("C:\\Windows") = [2B LE len][utf8][0x00]
+        let path = "C:\\Windows";
+        let mut args: Vec<u8> = Vec::new();
+        let n = path.as_bytes().len() + 1; // +1 for the null the frontend appends
+        args.push((n & 0xff) as u8);
+        args.push(((n >> 8) & 0xff) as u8);
+        args.extend_from_slice(path.as_bytes());
+        args.push(0);
+        let out = run_bof(&bof, &args).expect("file_list should succeed");
+        eprintln!("FILE_LIST OUTPUT ({} bytes):\n{}", out.len(), &out[..out.len().min(400)]);
+        assert!(out.starts_with("CWD:"), "expected CWD: header, got: {out:?}");
+        assert!(!out.contains("file_list:"), "BOF reported error: {out}");
+    }
+
+    /// Runs winapi_exec (direct CreateProcessA, no shell) with a plain-text
+    /// `whoami.exe` command. Proves the loader resolves the KERNEL32$* imports
+    /// and that the BOF launches a real process and captures its output.
+    /// Requires examples/winapi_exec.x64.o built.
+    #[test]
+    fn run_winapi_exec_whoami() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/winapi_exec.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/winapi_exec.x64.o not built"); return; }
+        };
+        let out = run_bof(&bof, b"whoami.exe").expect("winapi_exec should succeed");
+        eprintln!("WINAPI_EXEC OUTPUT:\n{out}");
+        assert!(!out.contains("winapi_exec: CreateProcessA failed"), "BOF reported error: {out}");
+        // banner + non-empty whoami output (username line)
+        assert!(out.contains("winapi_exec: whoami.exe"), "expected banner, got: {out:?}");
+        assert!(out.trim().len() > "winapi_exec: whoami.exe (exit 0)".len(),
+                "expected whoami output beyond the banner, got: {out:?}");
+    }
+}

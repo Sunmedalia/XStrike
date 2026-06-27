@@ -8,8 +8,9 @@
       <div class="mode-switch">
         <button class="mode-btn" :class="{ active: execMode === 'cmd' }" @click="setMode('cmd')">CMD</button>
         <button class="mode-btn" :class="{ active: execMode === 'powershell' }" @click="setMode('powershell')">PowerShell</button>
+        <button class="mode-btn" :class="{ active: execMode === 'winapi' }" @click="setMode('winapi')">WinAPI</button>
       </div>
-      <span class="mode-hint">{{ execMode === 'powershell' ? 'Scripted ops' : 'Native shell' }}</span>
+      <span class="mode-hint">{{ modeHint }}</span>
     </div>
     <div v-if="taskBanner" class="task-banner" @click.stop>
       <span class="task-banner-label">Task Created</span>
@@ -54,9 +55,10 @@ const props = defineProps<{
   targetId?: string;
   prompt?: string;
   hideModebar?: boolean;
-  forcedExecMode?: 'cmd' | 'powershell';
+  forcedExecMode?: 'cmd' | 'powershell' | 'winapi';
 }>()
 
+type ExecMode = 'cmd' | 'powershell' | 'winapi'
 type TerminalLine = { text: string; type?: string; prompt?: string }
 type TerminalSessionCache = {
   lines: TerminalLine[]
@@ -64,7 +66,7 @@ type TerminalSessionCache = {
   input: string
   history: string[]
   historyIdx: number
-  execMode: 'cmd' | 'powershell'
+  execMode: ExecMode
   selectedTarget: string | null
 }
 const terminalCache: Map<string, TerminalSessionCache> = (() => {
@@ -80,7 +82,7 @@ const toast = useToastStore()
 const lines = ref<TerminalLine[]>([])
 const input = ref('')
 const loading = ref(false)
-const execMode = ref<'cmd' | 'powershell'>('cmd')
+const execMode = ref<ExecMode>('cmd')
 const taskBanner = ref('')
 const history = ref<string[]>([])
 const historyIdx = ref(-1)
@@ -95,7 +97,9 @@ const effectiveTarget = computed(() => props.targetId || selectedTarget.value ||
 
 const currentPrompt = computed(() => {
   if (props.targetId) {
-    return execMode.value === 'powershell' ? 'PS>' : 'cmd>'
+    if (execMode.value === 'powershell') return 'PS>'
+    if (execMode.value === 'winapi') return 'api>'
+    return 'cmd>'
   }
   if (selectedTarget.value) {
     const short = selectedTarget.value.length > 16
@@ -106,7 +110,26 @@ const currentPrompt = computed(() => {
   return props.prompt || 'ghost>'
 })
 
-const cacheKeyFor = (targetId?: string, mode?: 'cmd' | 'powershell') => {
+const modeHint = computed(() => {
+  if (execMode.value === 'powershell') return 'Scripted ops'
+  if (execMode.value === 'winapi') return 'Direct CreateProcessA (no shell)'
+  return 'Native shell'
+})
+
+// Per-mode BOF lookup. cmd/powershell wrap a shell; winapi runs the exe
+// directly via CreateProcessA — no shell features (pipes/redirects/builtins).
+const modeBofPattern = (mode: ExecMode): RegExp => {
+  if (mode === 'powershell') return /^powershell_exec\b/i
+  if (mode === 'winapi') return /^winapi_exec\b/i
+  return /^cmd_exec\b/i
+}
+const modeBofFile = (mode: ExecMode): string => {
+  if (mode === 'powershell') return 'powershell_exec.o'
+  if (mode === 'winapi') return 'winapi_exec.o'
+  return 'cmd_exec.o'
+}
+
+const cacheKeyFor = (targetId?: string, mode?: ExecMode) => {
   const base = targetId || '__global__'
   return targetId ? `${base}:${mode || 'cmd'}` : base
 }
@@ -119,7 +142,7 @@ const defaultLinesFor = (targetId?: string): TerminalLine[] => {
     { text: 'Type "help" for available commands. Use Tab for auto-completion.', type: 'info' }
   ]
 }
-const saveSession = (targetId?: string, mode?: 'cmd' | 'powershell') => {
+const saveSession = (targetId?: string, mode?: ExecMode) => {
   const resolvedMode = mode || execMode.value
   terminalCache.set(cacheKeyFor(targetId, resolvedMode), {
     lines: [...lines.value],
@@ -131,7 +154,7 @@ const saveSession = (targetId?: string, mode?: 'cmd' | 'powershell') => {
     selectedTarget: selectedTarget.value
   })
 }
-const loadSession = (targetId?: string, mode?: 'cmd' | 'powershell') => {
+const loadSession = (targetId?: string, mode?: ExecMode) => {
   const resolvedMode = mode || props.forcedExecMode || execMode.value
   const cached = terminalCache.get(cacheKeyFor(targetId, resolvedMode))
   if (cached) {
@@ -183,19 +206,19 @@ const handleCommand = async () => {
 const executeOnBeacon = async (cmd: string) => {
   loading.value = true
   try {
-    const pattern = execMode.value === 'powershell' ? /^powershell_exec\b/i : /^cmd_exec\b/i
-    const bof = appStore.bofs.find(b => pattern.test(b.name))
-    const expected = execMode.value === 'powershell' ? 'powershell_exec.o' : 'cmd_exec.o'
+    const mode = execMode.value
+    const bof = appStore.bofs.find(b => modeBofPattern(mode).test(b.name))
+    const expected = modeBofFile(mode)
     if (!bof) {
       lines.value.push({ text: `No ${expected} BOF found. Upload ${expected} first.`, type: 'error' })
       return
     }
 
-    // RustStrike's cmd_exec takes the command as RAW UTF-8 bytes (no length
-    // prefix) — see examples/cmd_exec.c. Encode the typed line verbatim.
+    // RustStrike's cmd_exec / powershell_exec / winapi_exec all take the command
+    // as RAW UTF-8 bytes (no length prefix). Encode the typed line verbatim.
     const args = Array.from(new TextEncoder().encode(cmd))
     await auditTaskInput({
-      source: execMode.value === 'powershell' ? 'terminal:powershell' : 'terminal:cmd',
+      source: mode === 'powershell' ? 'terminal:powershell' : mode === 'winapi' ? 'terminal:winapi' : 'terminal:cmd',
       nodeId: props.targetId || '',
       input: cmd
     })
@@ -296,7 +319,7 @@ const onKeydown = (e: KeyboardEvent) => {
   }
 }
 
-const setMode = (mode: 'cmd' | 'powershell') => {
+const setMode = (mode: ExecMode) => {
   if (execMode.value === mode) return
   execMode.value = mode
   focusInput()
@@ -377,6 +400,7 @@ onUnmounted(() => {
 .mode-dot { width: 7px; height: 7px; border-radius: 999px; }
 .mode-dot.dot-cmd { background: var(--blue); box-shadow: 0 0 8px rgba(88, 166, 255, 0.75); }
 .mode-dot.dot-powershell { background: var(--pri); box-shadow: 0 0 8px rgba(64, 196, 99, 0.75); }
+.mode-dot.dot-winapi { background: var(--amber); box-shadow: 0 0 8px rgba(210, 153, 34, 0.75); }
 .mode-label { font-size: 10px; color: var(--tx-3); text-transform: uppercase; letter-spacing: 0.7px; }
 .mode-switch {
   display: inline-flex;

@@ -82,7 +82,7 @@ REST: `GET /api/implants`, `POST /api/implants/{id}/hello`, `POST /api/implants/
 
 **BOF task correlation (`task.go`).** RustStrike BOFs are synchronous and one-shot — the implant runs the BOF to completion, then sends exactly one `output` (or `error`) message. So a BOF run creates a task (`tasks.Create(implantID)`, BEFORE `Send` so a fast reply can't race it), and the NEXT `output`/`error` event for that implant completes it (`tasks.Feed`, called from `session.go` readLoop). The GUI polls `GET /api/tasks/{id}` to pull the result — this bridges RustStrike's fire-and-forget event model onto the request/response task-polling the Ghost UI expects. One active task per implant at a time (Create supersedes the prior); a reaper trims tasks older than 10 min.
 
-Verified end-to-end with the Rust implant: session list, hello, BOF-by-b64, BOF-by-name (nbtscan/ps/ls/cmd_exec/download/upload), task-poll output, and live WebSocket event push all work.
+Verified end-to-end with the Rust implant: session list, hello, BOF-by-b64, BOF-by-name (nbtscan/ps/ls/cmd_exec/download/upload, plus the component-driven proc_list/proc_kill/file_list/file_download/screenshot/powershell_exec/shellcode_exec/shellcode_exec_nt), task-poll output, and live WebSocket event push all work.
 
 ### Wails GUI (`clients/wails-gui/`)
 
@@ -114,6 +114,17 @@ cd clients/wails-gui && wails dev   # or: build/bin/wails-gui.exe
 - Only data/output Beacon APIs are stubbed; any other `Beacon*` symbol resolves to a no-op that records a note. Add new stubs in `beacon.rs` and register them in `build_external_map` (in `exec.rs`).
 - Executable BOF image memory is intentionally **not freed** after execution (kept for process lifetime in v1).
 - x64 only; x86 COFFs are rejected at parse time.
+- **Two arg conventions coexist** — don't conflate them. The loader's
+  `BeaconDataExtract` reads a **4-byte big-endian** length (CS packed, used by
+  `upload` and third-party BOFs like `nbtscan`). But the RustStrike frontend's
+  `encodeBeaconString` (`commandRegistry.ts`) frames strings as **2-byte
+  little-endian length + UTF-8 + null** — a *different* framing the loader's
+  Beacon APIs can't walk. The component-driven BOFs (`proc_list`/`proc_kill`/
+  `file_list`/`file_download`/`screenshot`/`shellcode_exec*`) parse that
+  2-byte-LE framing with an inline reader, **not** `BeaconDataExtract`. This is
+  intentional (matches the components); don't "fix" them to use CS packed. The
+  Terminal-driven BOFs (`cmd_exec`/`powershell_exec`/`ls`/`download`) keep the
+  raw-text convention (no prefix). See `examples/README.md` "Arg formats".
 
 ### BOF compatibility (third-party BOFs)
 

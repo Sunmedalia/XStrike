@@ -126,14 +126,32 @@ function implantToBeacon(im: Wails.WailsImplant): any {
 
 /** Synthesise console-command metadata for the BOF library. */
 function bofCommandMetas(bofs: { name: string }[]): any[] {
-  // Per-BOF arg encoding. RustStrike BOFs take RAW bytes (no length prefix):
-  // a single string arg is its UTF-8 bytes. The `raw_string` encoder (see
-  // commandRegistry) produces exactly that. `none` = no args.
-  const enc: Record<string, { encode_type: string; aliases?: string; description?: string }> = {
+  // Per-BOF arg encoding. Two conventions are in play:
+  //  - raw_string  : RAW UTF-8 bytes, no length prefix. RustStrike's Terminal
+  //                  convention — cmd_exec / powershell_exec / ls / download
+  //                  read the args buffer verbatim as text.
+  //  - beacon_string : [2-byte LE length][UTF-8][null]. The frontend's
+  //                  encodeBeaconString() framing — the feature components
+  //                  (ProcessList/FileBrowser/Screenshot) send this, and the
+  //                  matching BOFs (proc_kill/file_list/file_download) parse
+  //                  it with an inline 2-byte-LE reader.
+  //  - raw_hex_short : [2-byte LE length][raw bytes] — ShellcodeExecutor's
+  //                  framing for shellcode_exec*.
+  //  - none         : no args.
+  const enc: Record<string, { encode_type: string; aliases?: string; description?: string; destructive?: boolean }> = {
     cmd_exec: { encode_type: 'raw_string', aliases: 'sh,shell,run', description: 'Run a cmd.exe command' },
-    ps: { encode_type: 'none', description: 'List processes' },
-    ls: { encode_type: 'raw_string', aliases: 'dir', description: 'List directory (optional path)' },
-    download: { encode_type: 'raw_string', description: 'Download a file (base64 output)' },
+    powershell_exec: { encode_type: 'raw_string', aliases: 'ps,powershell', description: 'Run a PowerShell command' },
+    winapi_exec: { encode_type: 'raw_string', aliases: 'api,winapi,run-direct', description: 'Run an exe directly via CreateProcessA (no shell)' },
+    ps: { encode_type: 'none', description: 'List processes (ps.c format)' },
+    proc_list: { encode_type: 'none', aliases: 'procs', description: 'List processes (component format)' },
+    proc_kill: { encode_type: 'beacon_string', aliases: 'kill', description: 'Kill a process by PID', destructive: true },
+    ls: { encode_type: 'raw_string', aliases: 'dir', description: 'List directory (ls.c format)' },
+    file_list: { encode_type: 'beacon_string', aliases: 'ls2,flist', description: 'List directory (component format)' },
+    download: { encode_type: 'raw_string', description: 'Download a file (raw-text path, base64 output)' },
+    file_download: { encode_type: 'beacon_string', aliases: 'fdownload', description: 'Download a file (component format, base64 output)' },
+    screenshot: { encode_type: 'none', aliases: 'screen', description: 'Capture a desktop screenshot (BMP)' },
+    shellcode_exec: { encode_type: 'raw_hex_short', aliases: 'sc,shellcode', description: 'Run shellcode (VirtualAlloc+CreateThread)' },
+    shellcode_exec_nt: { encode_type: 'raw_hex_short', aliases: 'scnt', description: 'Run shellcode (NtCreateThreadEx)' },
     hello: { encode_type: 'none', description: 'Link check' },
   }
   return bofs.map((b) => {
@@ -146,7 +164,7 @@ function bofCommandMetas(bofs: { name: string }[]): any[] {
       category: 'bof',
       args_json: cfg.encode_type === 'none' ? [] : [{ name: 'arg', type: 'string', required: false }],
       encode_type: cfg.encode_type,
-      destructive: false,
+      destructive: cfg.destructive || false,
       help_extra: '',
       enabled: true,
       plugin_name: '',
