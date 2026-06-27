@@ -74,6 +74,9 @@ Ensure-Bofs
 
 # --- launch -------------------------------------------------------------------
 $env:RUSTSTRIKE_BOFS = $bofsDir
+# SQLite DB next to the core exe; stub builder finds the implant exe.
+$env:RUSTSTRIKE_DB = if ($env:RUSTSTRIKE_DB) { $env:RUSTSTRIKE_DB } else { Join-Path $root 'ruststrike.db' }
+$env:RUSTSTRIKE_IMPLANT_EXE = $implantExe
 
 $jobs = New-Object System.Collections.Generic.List[object]
 $implantShell = $null

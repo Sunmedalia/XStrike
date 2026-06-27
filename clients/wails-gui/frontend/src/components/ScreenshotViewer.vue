@@ -211,8 +211,49 @@ const saveScreenshot = (shot: Screenshot) => {
   link.click()
 }
 
-watch(() => props.agent.id, (next) => {
+// Hydrate persisted screenshots from the SQLite store (via /agents/{id}/artifacts).
+// Called when the in-memory cache for this agent is empty, so screenshots
+// survive an app/core restart. Each persisted screenshot is a BMP blob.
+const hydrateFromDb = async (agentId: string) => {
+  if (!agentId) return
+  const id = Number(agentId)
+  if (!id) return
+  try {
+    const res = await api.get(`/agents/${id}/artifacts`, { params: { kind: 'screenshot', limit: 8 }, silentError: true } as any)
+    const arts: any[] = res.data?.data || []
+    if (!arts.length) return
+    const restored: Screenshot[] = []
+    for (const a of arts) {
+      if (!a.has_blob) continue
+      try {
+        const one = await api.get(`/agents/${id}/artifacts/${a.id}`, { silentError: true } as any)
+        const b64 = one.data?.data?.b64
+        if (!b64) continue
+        const fullImage = `data:image/bmp;base64,${b64}`
+        const thumbnail = await generateThumbnail(fullImage, 300, 200).catch(() => fullImage)
+        restored.push({
+          id: a.id,
+          timestamp: new Date(a.ts * 1000).toLocaleString(),
+          width: 0, height: 0,
+          fullImage,
+          thumbnail
+        })
+      } catch { /* skip one bad artifact */ }
+    }
+    if (restored.length) {
+      // newest-first in DB (ListArtifacts returns DESC); reverse so unshift-style
+      screenshots.value = restored
+      saveShots(agentId)
+    }
+  } catch { /* core may be old/unreachable; silent */ }
+}
+
+watch(() => props.agent.id, async (next) => {
   loadShots(next)
+  // If the in-memory cache is empty, hydrate from the persisted store.
+  if (!screenshots.value.length) {
+    await hydrateFromDb(next)
+  }
 }, { immediate: true })
 </script>
 

@@ -24,21 +24,23 @@ package main
 import (
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // globals wired in main(); read by handlers/goroutines.
 var (
-	manager *SessionManager
-	bus     *EventBus
-	boflib  *BofLib
-	tasks   *TaskStore
-	logMu   sync.Mutex
-	logOut  io.Writer = os.Stderr
+	manager     *SessionManager
+	bus         *EventBus
+	boflib      *BofLib
+	tasks       *TaskStore
+	store       *Store
+	listenerMgr *ListenerManager
+	logMu       sync.Mutex
+	logOut      io.Writer = os.Stderr
 )
 
 // logf returns a writer safe for concurrent logging lines.
@@ -58,6 +60,24 @@ func main() {
 	manager = NewSessionManager(bus)
 	tasks = NewTaskStore()
 	tasks.StartReaper()
+
+	// SQLite store (logs + listener config + agents + artifacts). Pure-Go
+	// modernc.org/sqlite — no cgo. Path via RUSTSTRIKE_DB env, else next to exe.
+	dbPath := os.Getenv("RUSTSTRIKE_DB")
+	st, err := NewStore(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[core] store: %v\n", err)
+		os.Exit(1)
+	}
+	store = st
+	// Persist every bus event as a log row (non-blocking, best-effort).
+	go func() {
+		ch := bus.Subscribe()
+		for ev := range ch {
+			store.LogEnqueue(time.Now().Unix(), ev.ImplantID, ev.Type, ev.Data)
+		}
+	}()
+
 	// BOF library dir: RUSTSTRIKE_BOFS env var, else ./bofs next to the exe
 	// (so it works regardless of the current working directory).
 	bofDir := os.Getenv("RUSTSTRIKE_BOFS")
@@ -71,14 +91,21 @@ func main() {
 	boflib = NewBofLib(bofDir)
 	fmt.Fprintf(os.Stderr, "[core] BOF library: %s\n", bofDir)
 
-	// TCP listener for implants.
-	ln, err := net.Listen("tcp", "0.0.0.0:"+tcpPort)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[core] tcp bind :%s: %v\n", tcpPort, err)
-		os.Exit(1)
+	// Listener manager: owns runtime start/stop of TCP implant listeners. The
+	// default boot listener is created through it so the whole TCP set is
+	// uniform + persisted. Persisted listeners from a prior run are restored.
+	listenerMgr = NewListenerManager(manager, store, bus)
+	if rows, err := store.ListListeners(); err == nil {
+		listenerMgr.Restore(rows)
 	}
-	go acceptImplants(ln)
-	fmt.Fprintf(os.Stderr, "[core] implant TCP on 0.0.0.0:%s\n", tcpPort)
+	// If no default listener exists yet, create the boot one.
+	if !hasListenerOnPort(tcpPort) {
+		if _, err := listenerMgr.Create("default", "0.0.0.0", tcpPort); err != nil {
+			fmt.Fprintf(os.Stderr, "[core] tcp bind :%s: %v\n", tcpPort, err)
+			os.Exit(1)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[core] implant TCP listeners: %d\n", len(listenerMgr.ListInfo()))
 
 	// HTTP/WS for operators.
 	mux := http.NewServeMux()
@@ -90,13 +117,13 @@ func main() {
 	}
 }
 
-func acceptImplants(ln net.Listener) {
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[core] accept: %v\n", err)
-			return
+// hasListenerOnPort reports whether a listener on the given port already
+// exists (restored from config), so we don't double-bind the boot port.
+func hasListenerOnPort(port string) bool {
+	for _, l := range listenerMgr.ListInfo() {
+		if l.Port == port {
+			return true
 		}
-		manager.Accept(conn)
 	}
+	return false
 }

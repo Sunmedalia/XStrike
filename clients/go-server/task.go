@@ -29,6 +29,7 @@ const (
 type Task struct {
 	ID        string     `json:"id"`
 	ImplantID uint64     `json:"implant_id"`
+	BofName   string     `json:"bof_name,omitempty"` // which BOF this task runs (for artifact capture)
 	Status    TaskStatus `json:"status"`
 	Output    string     `json:"output"`
 	Created   time.Time  `json:"created"`
@@ -49,30 +50,36 @@ func NewTaskStore() *TaskStore {
 // Create registers a new running task for an implant and returns its id. It
 // supersedes any prior active task for that implant.
 func (ts *TaskStore) Create(implantID uint64) string {
+	return ts.CreateNamed(implantID, "")
+}
+
+// CreateNamed is Create with the BOF name recorded for artifact capture.
+func (ts *TaskStore) CreateNamed(implantID uint64, bofName string) string {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.nextID++
 	id := fmt.Sprintf("t-%d", ts.nextID)
 	now := time.Now()
-	ts.tasks[id] = &Task{ID: id, ImplantID: implantID, Status: TaskRunning, Created: now, Updated: now}
+	ts.tasks[id] = &Task{ID: id, ImplantID: implantID, BofName: bofName, Status: TaskRunning, Created: now, Updated: now}
 	ts.active[implantID] = id
 	return id
 }
 
 // Feed appends an output/error chunk from an implant to its active task and
 // completes it. Called from the session readLoop when an output/error event
-// arrives. kind is the wire type: "output" or "error".
-func (ts *TaskStore) Feed(implantID uint64, kind, data string) {
+// arrives. kind is the wire type: "output" or "error". Returns the completed
+// task's BOF name (if any) so the caller can capture an artifact.
+func (ts *TaskStore) Feed(implantID uint64, kind, data string) (bofName string) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	id, ok := ts.active[implantID]
 	if !ok {
-		return
+		return ""
 	}
 	t, ok := ts.tasks[id]
 	if !ok {
 		delete(ts.active, implantID)
-		return
+		return ""
 	}
 	if t.Output == "" {
 		t.Output = data
@@ -88,6 +95,7 @@ func (ts *TaskStore) Feed(implantID uint64, kind, data string) {
 	}
 	// one-shot: clear active so a subsequent stray event doesn't append.
 	delete(ts.active, implantID)
+	return t.BofName
 }
 
 // Get returns a copy of a task by id.

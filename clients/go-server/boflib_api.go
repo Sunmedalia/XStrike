@@ -76,7 +76,7 @@ func bofRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	implantID := parseUintOr(implantStr, 0)
-	taskID := tasks.Create(implantID)
+	taskID := tasks.CreateNamed(implantID, name)
 	if err := s.Send(serverMsg{Type: "bof", File: fileB64, Args: body.Args}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

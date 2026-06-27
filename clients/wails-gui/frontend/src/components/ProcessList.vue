@@ -227,9 +227,38 @@ const confirmKillProc = () => {
   })
 }
 
-onMounted(() => {
+// Hydrate the last process snapshot from the persisted store (survives restart).
+// Used when the in-memory cache is empty (first open after restart) and the
+// live BOF didn't return rows (implant offline).
+const hydrateFromDb = async () => {
+  const id = Number(props.targetId)
+  if (!id) return
+  try {
+    const res = await api.get(`/agents/${id}/artifacts`, { params: { kind: 'proc_list', limit: 1 }, silentError: true } as any)
+    const arts: any[] = res.data?.data || []
+    if (!arts.length) return
+    const meta = arts[0].meta
+    if (!meta) return
+    procs.value = meta
+      .trim().split('\n').map((l: string) => l.trim()).filter(Boolean)
+      .map((line: string) => {
+        const parts = line.split('\t')
+        if (parts.length < 4) return null
+        return { name: parts[0], pid: Number(parts[1]) || 0, ppid: Number(parts[2]) || 0,
+                 arch: '-', user: '-', path: '-', threads: Number(parts[3]) || 0 }
+      }).filter(Boolean)
+    if (procs.value.length) updateCache()
+  } catch { /* silent */ }
+}
+
+onMounted(async () => {
   window.addEventListener('ghost:sync', onSync as EventListener)
-  refreshProcs(false)
+  await refreshProcs(false)
+  // If the live refresh came up empty (no cache + implant offline), restore
+  // the last snapshot from the persisted store.
+  if (!procs.value.length) {
+    await hydrateFromDb()
+  }
 })
 onUnmounted(() => {
   window.removeEventListener('ghost:sync', onSync as EventListener)

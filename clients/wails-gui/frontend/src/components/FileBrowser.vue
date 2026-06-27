@@ -573,6 +573,28 @@ const confirmDeleteFile = (file: any) => {
   })
 }
 
+// Hydrate the last file listing from the persisted store (survives restart).
+// Only used when there's no in-memory cache and a live refresh didn't yield
+// rows (e.g. the implant is offline). Restores the last-browsed directory.
+const hydrateFileListFromDb = async () => {
+  const id = Number(props.targetId)
+  if (!id) return
+  try {
+    const res = await api.get(`/agents/${id}/artifacts`, { params: { kind: 'file_list', limit: 1 }, silentError: true } as any)
+    const arts: any[] = res.data?.data || []
+    if (!arts.length) return
+    const meta = arts[0].meta
+    if (!meta) return
+    // parseFileListOutput(canonicalize=true) sets path from the CWD: line.
+    const rows = parseFileListOutput(meta, false)
+    if (rows.length || path.value) {
+      files.value = rows
+      displayedPath.value = path.value
+      updateCache()
+    }
+  } catch { /* silent */ }
+}
+
 onMounted(async () => {
   const cached = fileBrowserCache.get(props.targetId)
   if (cached) {
@@ -588,6 +610,11 @@ onMounted(async () => {
     displayedPath.value = path.value
     // Canonicalize on first load so the BOF's CWD can correct the initial path.
     await refreshFiles(true)
+    // If the live refresh came up empty (implant offline), hydrate the last
+    // listing from the persisted store so the operator sees prior context.
+    if (!files.value.length) {
+      await hydrateFileListFromDb()
+    }
   }
   window.addEventListener('ghost:sync', onSync as EventListener)
 })

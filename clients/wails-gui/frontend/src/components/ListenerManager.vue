@@ -124,12 +124,16 @@ const toggleListener = async (l: any) => {
   const action = l.active ? 'stop' : 'start'
   toggling.value = l.id
   try {
-    const res = await api.put(`/listeners/${l.id}/${action}`)
+    // start|stop are POST actions on the core (PUT is "update config"). Using
+    // PUT here used to fall into the update no-op branch and never actually
+    // stop the listener — the card stayed RUNNING.
+    const res = await api.post(`/listeners/${l.id}/${action}`)
     if (res.data.success) {
       toast.success(`Listener "${l.name}" ${action}ed`)
       await appStore.fetchListeners()
     }
-  } catch (err) {
+  } catch (err: any) {
+    toast.error(err?.message || `Failed to ${action} listener`)
   } finally {
     toggling.value = null
   }

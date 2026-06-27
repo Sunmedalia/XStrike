@@ -14,6 +14,13 @@ func mountAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/bofs", bofsHandler)
 	mux.HandleFunc("/api/bofs/", bofRunHandler)
 	mux.HandleFunc("/api/tasks/", taskHandler)
+	mux.HandleFunc("/api/listeners", listenersHandler)
+	mux.HandleFunc("/api/listeners/", listenerHandler)
+	mux.HandleFunc("/api/logs", logsHandler)
+	mux.HandleFunc("/api/agents", agentsHandler)
+	mux.HandleFunc("/api/agents/", agentArtifactsHandler)
+	mux.HandleFunc("/api/stub/build", stubBuildHandler)
+	mux.HandleFunc("/api/stub/save", stubSaveHandler)
 	mux.HandleFunc("/ws", handleWS)
 }
 
@@ -78,7 +85,7 @@ func implantHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Register a task BEFORE sending so a lightning-fast implant reply
 		// can't arrive before the task exists.
-		taskID := tasks.Create(id)
+		taskID := tasks.CreateNamed(id, body.Bof)
 		if err := s.Send(serverMsg{Type: "bof", File: fileB64, Args: body.Args}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

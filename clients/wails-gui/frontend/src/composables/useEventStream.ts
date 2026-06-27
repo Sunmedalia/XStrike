@@ -55,6 +55,9 @@ export function useEventStream() {
           case 'error':
             callbacks.onTaskCompleted?.({ node_id: String(ev.implant_id), data: ev.data, failed: true })
             break
+          case 'listener_changed':
+            callbacks.onListenerChanged?.({})
+            break
           default:
             break
         }

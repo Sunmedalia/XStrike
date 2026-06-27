@@ -30,3 +30,8 @@ Thumbs.db
 
 # Local goal/task scratch files
 goal.md
+
+# SQLite runtime database (created by the Go core next to the exe)
+*.db
+*.db-shm
+*.db-wal

