@@ -55,7 +55,18 @@ Four crates in a single workspace. Dependency direction: `protocol` ← `server`
 
 ### Critical cross-file invariant
 
-The `datap` struct layout in **`examples/beacon.h`** (offsets original=0, size=8, length=12, buffer=16) **must match** `crates/loader/src/beacon.rs` (`DATAP_*` constants). BOFs compile against `beacon.h`; the loader interprets the bytes. Change one, change the other.
+The `datap` struct layout in **`examples/beacon.h`** (Cobalt Strike 4.x: original=0, buffer=8, length=16, size=20) **must match** `crates/loader/src/beacon.rs` (`DATAP_*` constants). BOFs compile against `beacon.h`; the loader interprets the bytes. Change one, change the other.
+
+### Wire contract (for non-Rust servers/clients)
+
+The protocol is newline-delimited JSON over a single TCP stream. `crates/protocol/src/lib.rs` is the source of truth. When implementing the server in another language (Go/Java/…), match these exactly:
+
+- Discriminator is `type`, **lowercase** (`serde(tag="type", rename_all="lowercase")`). Variants: `hello`, `bof` (server→implant); `hello`, `output`, `error` (implant→server).
+- Server→implant `bof`: `{"type":"bof","file":"<b64 COFF>","args":"<b64 raw arg buffer>"}`. **`args` is REQUIRED** — the implant's serde `Bof` has no `#[serde(default)]`, so omitting it fails deserialization (`bad server message (missing field args)`). Send `"args":""` for no args. `file`/`args` are base64 (standard alphabet); `args` is the binary CS packed format, not text.
+- `hello`: `{"type":"hello"}`. Extra fields on the `hello` variant are tolerated (serde ignores unknown fields), but keep it minimal.
+- Implant→server replies: `{"type":"hello|output|error","data":"<utf8 string>"}`.
+- Each message is one line terminated by `\n`. Implant output can be large — use a generous line buffer.
+- A reference Go server lives in `clients/go-server/` and is verified to drive the Rust implant (hello + load + loadb, incl. the Extension-Kit nbtscan BOF).
 
 ### v1 limitations to respect when extending
 
