@@ -701,4 +701,38 @@ mod component_bof_tests {
         // whoami.exe prints the user; just assert non-empty output.
         assert!(out.trim().len() > 0, "expected whoami output, got: {out:?}");
     }
+
+    /// Runs the streaming file_download BOF on a known small file (notepad.exe)
+    /// and verifies the streamed base64 chunks concatenate into valid base64
+    /// that decodes to the file's actual bytes. Proves the 3072-byte chunk
+    /// boundary (divisible by 3 → no mid-stream padding) + the === FILE: header
+    /// the frontend strips. Requires examples/file_download.x64.o built.
+    #[test]
+    fn run_file_download_streaming() {
+        use base64::Engine as _;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/file_download.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/file_download.x64.o not built"); return; }
+        };
+        let path = "C:\\Windows\\notepad.exe";
+        let n = path.as_bytes().len() + 1;
+        let mut args: Vec<u8> = vec![n as u8, (n >> 8) as u8];
+        args.extend_from_slice(path.as_bytes());
+        args.push(0);
+        let out = run_bof(&bof, &args).expect("file_download should succeed");
+        // Strip the === FILE: header line.
+        let nl = out.find('\n').expect("expected header newline");
+        assert!(out[..nl].starts_with("=== FILE:"), "expected === FILE: header, got: {out:?}");
+        let b64 = out[nl + 1..].trim();
+        // The streamed chunks must concatenate into valid base64 that decodes
+        // to the real notepad.exe bytes — proving no padding/corruption at the
+        // 3072-byte chunk boundaries.
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("streamed base64 should decode");
+        let real = std::fs::read(path).expect("notepad.exe should exist");
+        assert_eq!(decoded, real, "decoded bytes don't match the real file");
+        eprintln!("file_download: decoded {} bytes (matched real file)", decoded.len());
+    }
 }

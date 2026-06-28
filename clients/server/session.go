@@ -122,7 +122,10 @@ func (sm *SessionManager) remove(id uint64, s *Session) {
 func (s *Session) readLoop() {
 	rd := bufio.NewReader(s.conn)
 	scan := bufio.NewScanner(rd)
-	scan.Buffer(make([]byte, 0, 1<<20), 4<<20)
+	// Max line 16 MB so a streamed file_download (up to 10 MB file → ~14 MB
+	// base64 on one line) fits. Screenshots (~1 MB) and ordinary BOF output
+	// are far smaller. Initial buffer 1 MB grows as needed.
+	scan.Buffer(make([]byte, 0, 1<<20), 16<<20)
 	for scan.Scan() {
 		line := scan.Text()
 		if line == "" {
