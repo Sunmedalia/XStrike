@@ -346,8 +346,8 @@ const handleSubmit = () => {
   word-break: break-all;
 }
 .pr-result-ok {
-  background: rgba(64, 196, 99, 0.08);
-  border: 1px solid rgba(64, 196, 99, 0.25);
+  background: color-mix(in srgb, var(--pri) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pri) 28%, transparent);
   color: var(--green, #6aad7e);
 }
 .pr-result-err {

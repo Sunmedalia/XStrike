@@ -29,7 +29,6 @@
         </button>
       </form>
       <div v-if="error" class="err">{{ error }}</div>
-      <button type="button" class="demo" @click="enterDemo">Enter demo console</button>
     </section>
   </div>
 </template>
@@ -41,6 +40,8 @@ import { LockKeyhole, Moon, Sun, User } from 'lucide-vue-next'
 import { useConnectionStore } from '../stores/connection'
 import api from '../services/api'
 import { asset } from '../services/base'
+import { isDesktop } from '../runtime/platform'
+import { MOCK_TOKEN, setMockMode } from '../services/mockMode'
 
 const THEME_KEY = 'ghost-theme'
 const isLight = ref(localStorage.getItem(THEME_KEY) === 'light')
@@ -62,6 +63,12 @@ const handleLogin = async () => {
   loading.value = true
   error.value = ''
   try {
+    if (isDesktop()) {
+      setMockMode(false)
+      if (localStorage.getItem('token') === MOCK_TOKEN) {
+        localStorage.removeItem('token')
+      }
+    }
     const res = await api.post('/auth/login', { username: username.value, password: password.value })
     if (res.data.success) {
       localStorage.setItem('token', res.data.data.token)
@@ -78,31 +85,28 @@ const handleLogin = async () => {
   }
 }
 
-// Skip auth entirely and boot into the mock-data console.
-const enterDemo = () => {
-  localStorage.setItem('ghost-demo', '1')
-  router.push('/')
-}
 </script>
 
 <style scoped>
 .dusk-login {
-  --bg:    #151922;
-  --panel: #1d232d;
-  --field: #242b36;
-  --bd:    rgba(191, 203, 218, 0.14);
-  --tx:    #edf1f6;
-  --tx-2:  #aeb9c7;
-  --tx-3:  #778394;
-  --pri:   #4fc3ad;
-  --pri-h: #3aaf98;
+  --bg:    #eef8ff;
+  --panel: #fbfdff;
+  --field: #f2f9fe;
+  --bd:    rgba(68, 148, 195, 0.18);
+  --tx:    #143045;
+  --tx-2:  #4c7088;
+  --tx-3:  #7c9cb1;
+  --pri:   #5ebef2;
+  --pri-h: #42aee7;
   --red:   #ee6b6b;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 
   position: fixed;
   inset: 0;
-  background: var(--bg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(231, 247, 255, 0.72)),
+    var(--bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -111,26 +115,26 @@ const enterDemo = () => {
   color: var(--tx);
 }
 .dusk-login.light {
-  --bg:    #eef1f5;
+  --bg:    #eef8ff;
   --panel: #fbfcfe;
-  --field: #f3f5f8;
-  --bd:    rgba(43, 59, 79, 0.14);
-  --tx:    #17202b;
-  --tx-2:  #526173;
-  --tx-3:  #8491a2;
-  --pri:   #168b78;
-  --pri-h: #117665;
+  --field: #f1f8fd;
+  --bd:    rgba(68, 148, 195, 0.18);
+  --tx:    #143045;
+  --tx-2:  #4c7088;
+  --tx-3:  #7c9cb1;
+  --pri:   #5ebef2;
+  --pri-h: #42aee7;
   --red:   #c94c4c;
 }
 
 .login-card {
   position: relative;
   width: min(360px, 100%);
-  padding: 34px 30px 28px;
+  padding: 36px 30px 30px;
   border: 1px solid var(--bd);
   border-radius: 12px;
   background: var(--panel);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 24px 70px rgba(69, 151, 202, 0.22);
 }
 
 .logo {
@@ -138,6 +142,7 @@ const enterDemo = () => {
   height: 72px;
   object-fit: contain;
   border-radius: 18px;
+  filter: drop-shadow(0 14px 22px rgba(94, 190, 242, 0.28));
 }
 .name {
   font-family: var(--font-mono);
@@ -193,7 +198,7 @@ const enterDemo = () => {
 .submit {
   width: 100%;
   background: var(--pri);
-  color: #ffffff;
+  color: #062235;
   border: none;
   height: 42px;
   border-radius: 8px;
@@ -229,19 +234,5 @@ const enterDemo = () => {
   transition: color 0.15s, border-color 0.15s;
 }
 .theme-toggle:hover { color: var(--tx); border-color: var(--pri); }
-
-.demo {
-  margin-top: 14px;
-  width: 100%;
-  background: transparent;
-  border: 1px dashed var(--bd);
-  border-radius: 8px;
-  color: var(--tx-3);
-  padding: 9px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-.demo:hover { color: var(--pri); border-color: var(--pri); }
 
 </style>

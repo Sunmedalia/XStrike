@@ -2,9 +2,9 @@
  * Unified axios adapter: mock (demo) OR real (Wails desktop) backend.
  *
  * Installed on the shared axios instance in services/api.ts. Every request the
- * Ghost UI makes (`api.get/post/...`) lands here. We branch on mode:
+ * XStrike UI makes (`api.get/post/...`) lands here. We branch on mode:
  *
- *   - mock  → answer from services/mockData.ts (browser demo / `?demo=1`)
+ *   - mock  → answer from services/mockData.ts (browser preview / `?demo=1`)
  *   - real  → call the Wails Go bindings (services/wailsBindings), which proxy
  *             the Go service core, which drives the real Rust implant.
  *
@@ -13,7 +13,7 @@
  * `{ success, data, error }` envelope is preserved so the response interceptor
  * in api.ts (toasts, 401 redirect) keeps working.
  *
- * Real-mode mapping (Ghost UI endpoint → RustStrike):
+ * Real-mode mapping (XStrike UI endpoint → RustStrike):
  *   GET  /nodes            → ListImplants()            (sparse beacon shape)
  *   GET  /listeners        → []                         (no listener concept)
  *   GET  /bof              → ListBofs()
@@ -84,6 +84,15 @@ function bytesToB64(bytes: number[] | undefined): string {
   let bin = ''
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i] & 0xff)
   return btoa(bin)
+}
+
+async function syncRealAuthToken() {
+  const token = localStorage.getItem('token') || ''
+  try {
+    await Wails.SetAuthToken(token)
+  } catch {
+    /* Wails may not be ready during early boot; the next request will retry. */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +214,7 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
     const token = await Wails.Login(String(body?.username || ''), String(body?.password || ''))
     return ok(config, { success: true, data: { token } })
   }
+  await syncRealAuthToken()
   if (method === 'post' && path === '/auth/ticket') return ok(config, { success: true, data: 'real-no-ticket' })
   if (method === 'post' && path === '/auth/logout') return ok(config, { success: true, data: {} })
 

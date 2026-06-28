@@ -13,13 +13,13 @@
   --tx-2: #a8b3c3;
   --tx-3: #748196;
   --tx-4: #4c5869;
-  --pri: #4fd1b1;
-  --pri-h: #38b99a;
-  --blue: #68a8ff;
+  --pri: #8bd8ff;
+  --pri-h: #66c7f5;
+  --blue: #8bd8ff;
   --red: #f85149;
   --amber: #e0b154;
   --purple: #a78bfa;
-  --cyan: #35c7d0;
+  --cyan: #8bd8ff;
   --green: #50c878;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', 'Consolas', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -35,13 +35,13 @@
   --tx-2: #3b4d63;
   --tx-3: #5e718a;
   --tx-4: #8698af;
-  --pri: #0f9d58;
-  --pri-h: #0d874b;
-  --blue: #2b6ee7;
+  --pri: #5ebef2;
+  --pri-h: #43aee6;
+  --blue: #5ebef2;
   --red: #db4f4f;
   --amber: #b8811a;
   --purple: #7b61ff;
-  --cyan: #0f9d92;
+  --cyan: #4cb9e8;
   --green: #1d9f53;
 }
 

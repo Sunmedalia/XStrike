@@ -495,7 +495,7 @@ onUnmounted(() => {
 .mode-meta { display: flex; align-items: center; gap: 8px; min-width: 120px; }
 .mode-dot { width: 7px; height: 7px; border-radius: 999px; }
 .mode-dot.dot-cmd { background: var(--blue); box-shadow: 0 0 8px rgba(88, 166, 255, 0.75); }
-.mode-dot.dot-powershell { background: var(--pri); box-shadow: 0 0 8px rgba(64, 196, 99, 0.75); }
+.mode-dot.dot-powershell { background: var(--pri); box-shadow: 0 0 8px color-mix(in srgb, var(--pri) 75%, transparent); }
 .mode-dot.dot-winapi { background: var(--amber); box-shadow: 0 0 8px rgba(210, 153, 34, 0.75); }
 .mode-label { font-size: 10px; color: var(--tx-3); text-transform: uppercase; letter-spacing: 0.7px; }
 .mode-switch {
@@ -519,8 +519,8 @@ onUnmounted(() => {
 }
 .mode-btn.active {
   color: var(--bg);
-  background: linear-gradient(135deg, var(--pri), #2fbf74);
-  box-shadow: 0 2px 10px rgba(64, 196, 99, 0.35);
+  background: linear-gradient(135deg, var(--pri), var(--blue));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--pri) 35%, transparent);
 }
 .mode-hint {
   margin-left: auto;
@@ -662,7 +662,7 @@ onUnmounted(() => {
 }
 :global([data-theme='light']) .mode-btn.active {
   color: #ffffff;
-  background: linear-gradient(135deg, #0f9d58, #2b6ee7);
+  background: linear-gradient(135deg, #8bd8ff, #5ebef2);
   box-shadow: 0 2px 8px rgba(43, 110, 231, 0.25);
 }
 :global([data-theme='light']) .mode-hint {

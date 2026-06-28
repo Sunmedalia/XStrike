@@ -171,7 +171,7 @@ onMounted(() => {
 
 .listener-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
 .listener-card { background: var(--bg-2); border: 1px solid var(--bd); border-radius: 10px; padding: 16px; display: flex; align-items: center; gap: 16px; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-.listener-card.active { border-color: var(--pri); background: rgba(64, 196, 99, 0.02); }
+.listener-card.active { border-color: var(--pri); background: color-mix(in srgb, var(--pri) 5%, transparent); }
 
 /* 标志球 */
 .status-indicator { width: 10px; height: 10px; position: relative; flex-shrink: 0; }
@@ -190,7 +190,7 @@ onMounted(() => {
 
 /* 状态标签 */
 .status-tag { font-size: 8px; font-weight: 800; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.5px; border: 1px solid transparent; }
-.status-tag.active { color: var(--pri); border-color: rgba(64, 196, 99, 0.3); background: rgba(64, 196, 99, 0.1); }
+.status-tag.active { color: var(--pri); border-color: color-mix(in srgb, var(--pri) 34%, transparent); background: color-mix(in srgb, var(--pri) 12%, transparent); }
 .status-tag.stopped { color: var(--tx-3); border-color: var(--bd); background: var(--bg-3); }
 
 .listener-id { font-size: 10px; color: var(--tx-4); font-family: var(--font-mono); }

@@ -98,7 +98,7 @@
             <button @click="batchSleep">Sleep</button>
             <button @click="batchExit" class="danger">Exit</button>
             <button @click="batchDelete" class="danger">Delete</button>
-            <button @click="clearSel" class="ghost-btn">Clear</button>
+            <button @click="clearSel" class="select-clear-btn">Clear</button>
           </div>
         </Transition>
       </section>
@@ -846,14 +846,14 @@ onUnmounted(() => {
   --tx-2:  #aeb9c7;
   --tx-3:  #778394;
   --tx-4:  #4f5b6b;
-  --pri:   #4fc3ad;
-  --pri-h: #3aaf98;
+  --pri:   #8bd8ff;
+  --pri-h: #66c7f5;
   --platform-wash: rgba(79, 195, 173, 0.06);
-  --blue:  #6ea8d9;
+  --blue:  #8bd8ff;
   --red:   #f26f6f;
   --amber: #e0b154;
   --purple:#a78bfa;
-  --cyan:  #35c7d0;
+  --cyan:  #8bd8ff;
   --green: #50c878;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -882,19 +882,19 @@ onUnmounted(() => {
   --tx-2:  #526173;
   --tx-3:  #8491a2;
   --tx-4:  #b2bbc7;
-  --pri:   #168b78;
-  --pri-h: #117665;
-  --platform-wash: rgba(22, 139, 120, 0.05);
+  --pri:   #5ebef2;
+  --pri-h: #42aee7;
+  --platform-wash: rgba(94, 190, 242, 0.08);
   --red:   #c94c4c;
   --amber: #9a6c16;
   --purple:#7158c8;
-  --cyan:  #0c909a;
+  --cyan:  #4cb9e8;
   --green: #15834f;
 }
 .dusk.platform-windows {
-  --pri:   #6ea8d9;
-  --pri-h: #5a94c5;
-  --platform-wash: rgba(110, 168, 217, 0.08);
+  --pri:   #8bd8ff;
+  --pri-h: #66c7f5;
+  --platform-wash: rgba(139, 216, 255, 0.10);
 }
 .dusk.platform-linux {
   --pri:   #d99a45;
@@ -902,10 +902,10 @@ onUnmounted(() => {
   --platform-wash: rgba(217, 154, 69, 0.08);
 }
 .dusk.light.platform-windows {
-  --pri:   #6baee8;
-  --pri-h: #4f98d6;
-  --blue:  #4f98d6;
-  --platform-wash: rgba(107, 174, 232, 0.12);
+  --pri:   #5ebef2;
+  --pri-h: #42aee7;
+  --blue:  #5ebef2;
+  --platform-wash: rgba(94, 190, 242, 0.14);
 }
 .dusk.light.platform-linux {
   --pri:   #e2a258;
@@ -968,7 +968,7 @@ onUnmounted(() => {
   width: 28px;
   height: 28px;
   object-fit: contain;
-  filter: drop-shadow(0 8px 14px rgba(79, 209, 177, 0.24));
+  filter: drop-shadow(0 8px 14px rgba(94, 190, 242, 0.28));
 }
 .d-name {
   font-family: var(--font-mono);
@@ -1246,11 +1246,11 @@ onUnmounted(() => {
   border-color: var(--red);
   color: var(--red);
 }
-.d-sel button.ghost-btn {
+.d-sel button.select-clear-btn {
   border-color: transparent;
   background: transparent;
 }
-.d-sel button.ghost-btn:hover {
+.d-sel button.select-clear-btn:hover {
   color: var(--tx);
 }
 
@@ -1334,7 +1334,7 @@ onUnmounted(() => {
 .d-tabs-logo {
   width: 22px;
   height: 22px;
-  filter: drop-shadow(0 5px 10px rgba(79, 209, 177, 0.18));
+  filter: drop-shadow(0 5px 10px rgba(94, 190, 242, 0.24));
 }
 .d-tabs-name {
   font-size: 14px;

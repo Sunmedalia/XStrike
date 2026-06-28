@@ -2,7 +2,7 @@
  * Runtime platform detection.
  *
  * Detects whether the app is running inside a desktop shell (Tauri or Wails)
- * or as a regular web page served by the Ghost server.
+ * or as a regular web page served by a preview/dev server.
  *
  * Wails v2 injects `window.go` (generated bindings) and `window.runtime`
  * (the runtime shim). Tauri injects `__TAURI_INTERNALS__` / `__TAURI__`.

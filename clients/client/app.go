@@ -78,6 +78,12 @@ type CoreEvent struct {
 
 // ---- REST wrappers (frontend calls these via the generated bindings) ----
 
+// SetAuthToken lets the frontend restore a persisted bearer token into the Go
+// bridge after an app restart. The core still validates it on every request.
+func (a *App) SetAuthToken(token string) {
+	a.coreToken = strings.TrimSpace(token)
+}
+
 // Login authenticates against the core and stores the returned bearer token for
 // subsequent REST calls and WebSocket reconnects.
 func (a *App) Login(username, password string) (string, error) {

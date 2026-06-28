@@ -246,6 +246,6 @@ onUnmounted(() => {
 .task-banner { margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--bd); border-radius: 4px; background: rgba(88,166,255,.08); color: var(--blue); }
 .line { white-space: pre-wrap; word-break: break-word; margin-bottom: 6px; padding: 6px 8px; border-radius: 4px; border: 1px solid transparent; }
 .line.sys { color: var(--tx-3); border-color: var(--bd); background: var(--bg-2); }
-.line.info { color: var(--tx); background: rgba(64,196,99,.08); border-color: rgba(64,196,99,.25); }
+.line.info { color: var(--tx); background: color-mix(in srgb, var(--pri) 10%, transparent); border-color: color-mix(in srgb, var(--pri) 28%, transparent); }
 .line.error { color: var(--red); background: rgba(244,67,54,.08); border-color: rgba(244,67,54,.25); }
 </style>

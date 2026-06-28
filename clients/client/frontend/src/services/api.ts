@@ -4,6 +4,8 @@ import { useConnectionStore } from '../stores/connection'
 import { getApiBaseUrl } from '../runtime/env'
 import { isMockMode, MOCK_TOKEN } from './mockMode'
 import { installBackendAdapter } from './mockAdapter'
+import { SetAuthToken } from './wailsBindings'
+import { isDesktop } from '../runtime/platform'
 import type { Router } from 'vue-router'
 
 /**
@@ -71,6 +73,7 @@ api.interceptors.response.use(
 
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
+      try { await SetAuthToken('') } catch { /* desktop bridge may be unavailable */ }
       const connStore = useConnectionStore()
       if (_router) {
         if (connStore.isRemote) {
@@ -93,15 +96,20 @@ export default api
 
 // ── Backend adapter ────────────────────────────────────────────────────────
 // Install the unified adapter in BOTH modes:
-//   - mock  → answers from services/mockData.ts (browser demo / `?demo=1`)
+//   - mock  → answers from services/mockData.ts (browser preview / `?demo=1`)
 //   - real  → calls the Wails Go bindings that drive the Rust implant
 // The adapter branches per-request on isMockMode(), so the operator can flip
-// between real and demo at runtime via the `ghost-demo` localStorage flag.
+// between real and preview mode at runtime via the legacy `ghost-demo` flag.
 installBackendAdapter(api)
+
+if (isDesktop() && localStorage.getItem('token') === MOCK_TOKEN) {
+  localStorage.removeItem('token')
+  localStorage.removeItem('ghost-demo')
+}
 
 // Ensure a token only for demo mode. Real desktop mode now authenticates
 // against the configured core account from the Login page.
-if (isMockMode() && !localStorage.getItem('token')) {
+if (isMockMode() && !isDesktop() && !localStorage.getItem('token')) {
   localStorage.setItem('token', MOCK_TOKEN)
 }
 

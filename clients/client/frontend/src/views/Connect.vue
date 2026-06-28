@@ -98,6 +98,8 @@ import { useRouter } from 'vue-router'
 import { normalizeRemotePath, useConnectionStore } from '../stores/connection'
 import { asset } from '../runtime/env'
 import axios from 'axios'
+import { isDesktop } from '../runtime/platform'
+import { MOCK_TOKEN, setMockMode } from '../services/mockMode'
 
 const router = useRouter()
 const connStore = useConnectionStore()
@@ -131,6 +133,12 @@ onMounted(() => {
 async function handleConnect() {
   loading.value = true
   error.value = ''
+  if (isDesktop()) {
+    setMockMode(false)
+    if (localStorage.getItem('token') === MOCK_TOKEN) {
+      localStorage.removeItem('token')
+    }
+  }
 
   const scheme = port.value === 443 ? 'https' : 'http'
   const remotePath = normalizeRemotePath(path.value)
@@ -173,6 +181,12 @@ async function handleConnect() {
 
 function goLocal() {
   connStore.setLocal()
+  if (isDesktop()) {
+    setMockMode(false)
+    if (localStorage.getItem('token') === MOCK_TOKEN) {
+      localStorage.removeItem('token')
+    }
+  }
   // In local mode, check if already has a token
   const token = localStorage.getItem('token')
   if (token) {
@@ -250,7 +264,7 @@ function goLocal() {
 }
 .mode-btn.active {
   background: var(--pri);
-  color: var(--bg);
+  color: #062235;
 }
 .mode-btn:not(.active):hover {
   background: var(--bg-4);
@@ -317,7 +331,7 @@ function goLocal() {
 .connect-btn {
   width: 100%;
   background: var(--pri);
-  color: var(--bg);
+  color: #062235;
   border: none;
   padding: 10px;
   border-radius: 4px;

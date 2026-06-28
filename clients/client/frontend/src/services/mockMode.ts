@@ -4,9 +4,9 @@
  * Mode resolution:
  *   - desktop (Wails)        → REAL backend (drives the Rust implant via the
  *                               Go core). Mock is opt-in via the demo flag.
- *   - browser                 → mock (the Ghost server the axios layer expects
- *                               isn't running here; mock keeps the UI usable).
- *   - `?demo=1` / ghost-demo  → mock (forces demo even in the desktop shell, so
+ *   - browser                 → mock (the live Wails bridge is not available
+ *                               there, so mock keeps the UI usable).
+ *   - `?demo=1` / ghost-demo  → mock (forces preview mode in the desktop shell, so
  *                               the operator can preview the sample dataset).
  *
  * The real Wails Go backend is wired in via services/wailsBindings + the axios
@@ -31,16 +31,16 @@ function demoForced(): boolean {
 
 export function isMockMode(): boolean {
   if (demoForced()) return true
-  // Desktop = real backend. Browser = mock demo.
+  // Desktop = real backend. Browser = mock preview.
   return !isDesktop()
 }
 
-/** Real backend reachable (desktop, not forced into demo). */
+/** Real backend reachable (desktop, not forced into preview mode). */
 export function isRealMode(): boolean {
   return isDesktop() && !demoForced()
 }
 
-/** Force mock mode on/off from the UI (the Login "Enter demo console" button). */
+/** Force mock mode on/off while keeping the legacy storage flag compatible. */
 export function setMockMode(on: boolean) {
   try {
     if (on) localStorage.setItem(DEMO_FLAG, '1')

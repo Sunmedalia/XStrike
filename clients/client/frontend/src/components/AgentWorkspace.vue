@@ -183,7 +183,7 @@ watch(() => props.initialView, (next) => {
   box-shadow: 0 0 8px color-mix(in srgb, var(--pri) 60%, transparent);
 }
 .workspace-dot.dot-cmd { background: var(--blue); box-shadow: 0 0 8px rgba(88, 166, 255, 0.75); }
-.workspace-dot.dot-powershell { background: var(--pri); box-shadow: 0 0 8px rgba(64, 196, 99, 0.75); }
+.workspace-dot.dot-powershell { background: var(--pri); box-shadow: 0 0 8px color-mix(in srgb, var(--pri) 75%, transparent); }
 .workspace-dot.dot-winapi { background: var(--amber); box-shadow: 0 0 8px rgba(210, 153, 34, 0.75); }
 .workspace-dot.dot-files,
 .workspace-dot.dot-processes,

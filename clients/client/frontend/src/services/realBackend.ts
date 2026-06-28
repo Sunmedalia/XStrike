@@ -3,7 +3,7 @@
  *
  * In real (desktop) mode, BOF output and session events arrive asynchronously
  * via the Wails `core:event` stream — there is no `/logs` REST endpoint to poll
- * like the Ghost server had. So we keep a small client-side event log here that
+ * like the old server contract had. So we keep a small client-side event log here that
  * the `core:event` subscriber appends to and the axios adapter's `/logs` handler
  * returns. This lets the existing store/UI (which calls `GET /logs`) work
  * unchanged against the real backend.

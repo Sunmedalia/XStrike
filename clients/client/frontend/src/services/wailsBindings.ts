@@ -52,6 +52,10 @@ export function wailsReady(): boolean {
   return !!app()
 }
 
+export async function SetAuthToken(token: string): Promise<void> {
+  return app().SetAuthToken(token)
+}
+
 export async function Login(username: string, password: string): Promise<string> {
   return app().Login(username, password)
 }

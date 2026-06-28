@@ -15,7 +15,7 @@
     <!-- Upload area -->
     <div class="sp-section">
       <div class="sp-row">
-        <span class="sp-label">ghost-socks binary</span>
+        <span class="sp-label">XStrike SOCKS binary</span>
         <span class="sp-hint">{{ status.binary_exists ? '✓ uploaded' : 'not uploaded' }}</span>
         <input ref="fileInput" type="file" class="hidden" @change="onFileChange" />
         <button class="sp-btn" @click="fileInput?.click()" :disabled="uploading">
@@ -52,7 +52,7 @@
           <span class="sp-hint">Local SOCKS5 interface</span>
         </div>
         <div class="sp-note">
-          Agent command: <code>ghost-socks agent --server &lt;this-server&gt;:{{ srv.control.split(':')[1] || '9999' }}</code>
+          Agent command: <code>xstrike-socks agent --server &lt;this-server&gt;:{{ srv.control.split(':')[1] || '9999' }}</code>
         </div>
       </template>
     </div>
@@ -124,7 +124,7 @@ const onFileChange = async (e: Event) => {
     const form = new FormData()
     form.append('file', file)
     await api.post('/socks5/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } })
-    toast.success('ghost-socks binary uploaded')
+    toast.success('XStrike SOCKS binary uploaded')
     await refreshStatus()
   } catch (err: any) {
     toast.error(err?.response?.data?.error || 'Upload failed')

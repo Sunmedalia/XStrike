@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="XStrike">
+  <defs>
+    <linearGradient id="bg" x1="20" y1="16" x2="112" y2="118" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#eaf7ff"/>
+      <stop offset="0.48" stop-color="#9ddcff"/>
+      <stop offset="1" stop-color="#57b8f3"/>
+    </linearGradient>
+    <linearGradient id="x" x1="31" y1="26" x2="99" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8fdff"/>
+      <stop offset="0.46" stop-color="#d7f1ff"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#56baf6" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="#eef9ff"/>
+  <rect x="12" y="12" width="104" height="104" rx="23" fill="url(#bg)"/>
+  <path d="M34 28h19.5L64 48.8 74.8 28H94L75.2 63.7 96 100H76.1L63.7 77.5 51.6 100H32l20.8-36L34 28Z" fill="url(#x)" filter="url(#glow)"/>
+  <path d="M33 28h20.4L64 48.7 74.8 28H95L74.8 64.1 96 100H75.7L63.6 78 51.8 100H31.5l21.1-35.9L33 28Z" fill="none" stroke="#1f93d4" stroke-opacity="0.34" stroke-width="2"/>
+  <path d="M27 23h74" stroke="#ffffff" stroke-opacity="0.42" stroke-width="2" stroke-linecap="round"/>
+</svg>

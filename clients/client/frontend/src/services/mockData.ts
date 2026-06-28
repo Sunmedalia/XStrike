@@ -1,5 +1,5 @@
 /**
- * Mock data for the desktop / demo console.
+ * Mock data for browser preview mode.
  *
  * Centralised here so UI components never hard-code data. Every entry mirrors
  * the shape the real `/api` would return, so swapping `mockData` for live

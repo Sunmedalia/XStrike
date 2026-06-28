@@ -8,7 +8,7 @@
       <input
         ref="fileInput"
         type="file"
-        accept=".zip,.ghost"
+        accept=".zip,.xstrike,.ghost"
         style="display:none"
         @change="handleUpload"
       />
@@ -79,7 +79,7 @@
       <div style="font-size:36px;opacity:0.4">🧩</div>
       <div class="pm-empty-title">No Plugins Installed</div>
       <div class="pm-empty-desc">
-        Upload a <code>.zip</code> or <code>.ghost</code> plugin package to get started.
+        Upload a <code>.zip</code> or <code>.xstrike</code> plugin package to get started.
         <br />
         Plugins can add menus, panels, commands, and toolbar buttons to the UI automatically.
       </div>

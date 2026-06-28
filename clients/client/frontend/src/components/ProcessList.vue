@@ -283,7 +283,7 @@ const onSync = async () => {
 .proc-table th { text-align: left; padding: 8px 12px; background: var(--bg-3); position: sticky; top: 0; color: var(--tx-3); text-transform: uppercase; font-size: 10px; z-index: 1; border-right: 1px solid var(--bd); }
 .proc-table td { padding: 6px 12px; border-bottom: 1px solid var(--bd); border-right: 1px solid var(--bd); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proc-table tr:hover { background: var(--bg-4); cursor: pointer; }
-.proc-table tr.selected { background: rgba(64, 196, 99, 0.15); }
+.proc-table tr.selected { background: color-mix(in srgb, var(--pri) 16%, transparent); }
 
 .proc-name { color: var(--blue); font-weight: 600; }
 .proc-path { color: var(--tx-4); font-size: 10px; }

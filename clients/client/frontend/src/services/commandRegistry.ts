@@ -1,5 +1,5 @@
 /**
- * Ghost Console Command Registry
+ * XStrike Console Command Registry
  *
  * Provides a unified command system for the global terminal.
  * Three handler types: 'local' (no network), 'api' (REST call), 'bof' (BOF execution on beacon).
@@ -716,7 +716,7 @@ export async function loadBofCommands(_appStore?: any): Promise<void> {
     }
   } catch {
     // Silently fail — commands will be unavailable but system commands still work
-    console.warn('[Ghost] Failed to load BOF commands from server')
+    console.warn('[XStrike] Failed to load BOF commands from server')
   }
 
   // Also load plugin commands from manifests

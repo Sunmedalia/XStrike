@@ -182,7 +182,7 @@ onMounted(() => {
 .dbg-toggle.on {
   border-color: var(--pri);
   color: var(--pri);
-  background: rgba(64, 196, 99, 0.08);
+  background: color-mix(in srgb, var(--pri) 10%, transparent);
 }
 .dbg-toggle.on .sw::after {
   left: 11px;
@@ -265,9 +265,9 @@ onMounted(() => {
 .badge.task { color: var(--amber); }
 .badge.check { color: var(--purple); }
 .badge.system { color: var(--blue); }
-.badge.node_online { color: var(--pri); background: rgba(64, 196, 99, 0.12); }
+.badge.node_online { color: var(--pri); background: color-mix(in srgb, var(--pri) 14%, transparent); }
 .badge.node_offline { color: var(--red); background: rgba(220, 60, 60, 0.12); }
-.log-row.node-event td { background: rgba(64, 196, 99, 0.04); }
+.log-row.node-event td { background: color-mix(in srgb, var(--pri) 6%, transparent); }
 
 .message {
   word-break: break-all;
