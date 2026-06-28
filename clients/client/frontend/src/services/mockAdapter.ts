@@ -302,6 +302,28 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
       return ok(config, { success: true, data: arts })
     }
   }
+  // ── relays (pivot listeners on an implant) ─────────────────────────────
+  // /nodes/{id}/relay   POST   {bind_ip, port} → start; returns {id}
+  // /nodes/{id}/relays  GET    → list
+  // /nodes/{id}/relays/{rid} DELETE → stop
+  if (method === 'post' && /^\/nodes\/\d+\/relay$/.test(path)) {
+    const id = Number(path.split('/')[2])
+    const body = parseBody(config)
+    const r = await Wails.StartRelay(id, String(body?.bind_ip || '0.0.0.0'), Number(body?.port || 0))
+    return ok(config, { success: true, data: { id: r.id, relay_id: r.id, state: r.state } })
+  }
+  if (method === 'get' && /^\/nodes\/\d+\/relays$/.test(path)) {
+    const id = Number(path.split('/')[2])
+    const relays = await Wails.ListRelays(id)
+    return ok(config, { success: true, data: relays })
+  }
+  if (method === 'delete' && /^\/nodes\/\d+\/relays\/[^/]+$/.test(path)) {
+    const parts = path.split('/')
+    const id = Number(parts[2])
+    const rid = parts[4]
+    await Wails.StopRelay(id, rid)
+    return ok(config, { success: true, data: {} })
+  }
   if ((method === 'post' || method === 'delete') && path.startsWith('/nodes/')) {
     // /nodes/{id} | /nodes/{id}/stop | /nodes/{id}/delete
     const idStr = path.split('/')[2]
@@ -435,6 +457,9 @@ function blobToB64(bytes: Uint8Array): string {
 // mock-mode request dispatch
 // ---------------------------------------------------------------------------
 
+// Mock relay store: per-implant pivot listeners (demo mode only).
+const mockRelays: any[] = []
+
 async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
   const method = (config.method || 'get').toLowerCase()
   const path = toApiPath(config.url)
@@ -455,6 +480,25 @@ async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
     if (l) {
       l.status = action === 'start' ? 'running' : 'stopped'
     }
+    return ok(config, { success: true, data: {} })
+  }
+  // ── relays (mock pivot listeners) ──────────────────────────────────────
+  if (method === 'post' && /^\/nodes\/\d+\/relay$/.test(path)) {
+    const id = Number(path.split('/')[2])
+    const body = parseBody(config)
+    const port = Number(body?.port || 0) || 40000 + Math.floor(Math.random() * 9999)
+    const r = { id: 'rl-' + Math.random().toString(36).slice(2, 8), implant_id: id, bind_ip: String(body?.bind_ip || '0.0.0.0'), port, state: 'running' }
+    mockRelays.push(r)
+    return ok(config, { success: true, data: { id: r.id, relay_id: r.id, state: r.state } })
+  }
+  if (method === 'get' && /^\/nodes\/\d+\/relays$/.test(path)) {
+    const id = Number(path.split('/')[2])
+    return ok(config, { success: true, data: mockRelays.filter((r) => r.implant_id === id) })
+  }
+  if (method === 'delete' && /^\/nodes\/\d+\/relays\/[^/]+$/.test(path)) {
+    const rid = path.split('/')[4]
+    const i = mockRelays.findIndex((r) => r.id === rid)
+    if (i >= 0) mockRelays.splice(i, 1)
     return ok(config, { success: true, data: {} })
   }
   if ((method === 'post' || method === 'delete') && path.startsWith('/nodes/')) {

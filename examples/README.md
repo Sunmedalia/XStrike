@@ -160,6 +160,18 @@ curl -X POST "http://127.0.0.1:8091/api/stub/build" \
 Re-patching an already-patched exe strips the old trailer first (no
 accumulation). The trailer is host:port only for v1 (no sleep/jitter/SSL yet).
 
+### Pivot / relay (chain implants through each other)
+
+A connected implant can open a TCP relay listener so a second implant can dial
+**it** (not the core) and appear online — a CS-style TCP pivot. The parent
+splices each child's stream onto a fresh connection to the core, so the child is
+a normal new implant from the core's view. Start a relay on a parent (id 1) via
+`POST /api/implants/1/relay {bind_ip, port}` (port 0 = auto), read the actual
+port from `GET /api/implants/1/relays`, then **Generate Agent** with the parent's
+reachable IP + that port and run the child. See the root `README.md` and
+`CLAUDE.md` "Pivot / relay" for the full flow. (TCP-only for now; a named-pipe
+variant + SOCKS proxy are planned.)
+
 ### Silent (windowless) implant
 
 The workspace builds **two** implant variants from the same lib
