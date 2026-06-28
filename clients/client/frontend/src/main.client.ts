@@ -17,10 +17,17 @@ import { setRouter } from './services/api'
 
 // ── Theme ──
 const THEME_KEY = 'ghost-theme'
-const savedTheme = localStorage.getItem(THEME_KEY)
+const THEME_MIGRATION_KEY = 'xstrike-theme-migration'
+const THEME_MIGRATION_VALUE = 'light-blue-console'
+let savedTheme = localStorage.getItem(THEME_KEY)
+if (localStorage.getItem(THEME_MIGRATION_KEY) !== THEME_MIGRATION_VALUE) {
+  savedTheme = 'light'
+  localStorage.setItem(THEME_KEY, savedTheme)
+  localStorage.setItem(THEME_MIGRATION_KEY, THEME_MIGRATION_VALUE)
+}
 document.documentElement.setAttribute(
   'data-theme',
-  savedTheme === 'light' ? 'light' : 'dark'
+  savedTheme === 'dark' ? 'dark' : 'light'
 )
 
 // ── Pinia (must be created before router guards access stores) ──

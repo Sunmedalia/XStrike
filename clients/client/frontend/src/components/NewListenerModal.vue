@@ -87,5 +87,5 @@ const submit = async () => {
 .field input:focus, .field select:focus { border-color: var(--pri); }
 .modal-footer { padding: 12px 16px; border-top: 1px solid var(--bd); display: flex; justify-content: flex-end; gap: 8px; }
 .btn { padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; border: 1px solid var(--bd); background: var(--bg-3); color: var(--tx); }
-.btn.primary { background: var(--pri); color: var(--bg); border: none; }
+.btn.primary { background: var(--pri); color: var(--on-pri, #062235); border: none; }
 </style>

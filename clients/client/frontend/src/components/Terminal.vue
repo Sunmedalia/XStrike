@@ -518,7 +518,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .mode-btn.active {
-  color: var(--bg);
+  color: var(--on-pri, #062235);
   background: linear-gradient(135deg, var(--pri), var(--blue));
   box-shadow: 0 2px 10px color-mix(in srgb, var(--pri) 35%, transparent);
 }

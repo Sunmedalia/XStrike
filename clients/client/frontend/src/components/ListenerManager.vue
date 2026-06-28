@@ -166,7 +166,7 @@ onMounted(() => {
 .listener-manager { display: flex; flex-direction: column; height: 100%; padding: 16px; background: var(--bg); overflow-y: auto; }
 .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
 .btn { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 4px; border: 1px solid var(--bd); background: var(--bg-3); color: var(--tx); cursor: pointer; font-size: 12px; }
-.btn.primary { background: var(--pri); color: var(--bg); border: none; }
+.btn.primary { background: var(--pri); color: var(--on-pri, #062235); border: none; }
 .spacer { flex: 1; }
 
 .listener-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }

@@ -316,7 +316,7 @@ onMounted(() => {
 }
 .btn.primary {
   background: var(--pri);
-  color: var(--bg);
+  color: var(--on-pri, #062235);
   border: none;
   position: relative;
 }

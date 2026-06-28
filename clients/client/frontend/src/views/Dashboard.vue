@@ -302,7 +302,7 @@ const eventStream = useEventStream()
 // ─── Theme ───
 const THEME_KEY = 'ghost-theme'
 const PLATFORM_KEY = 'ghost-platform'
-const isLight = ref(localStorage.getItem(THEME_KEY) === 'light')
+const isLight = ref(localStorage.getItem(THEME_KEY) !== 'dark')
 const logoSrc = computed(() => asset(isLight.value ? '/ico/xstrike-icon-light.png' : '/ico/xstrike-icon-dark.png'))
 const rippleX = ref('50%')
 const rippleY = ref('50%')
@@ -836,25 +836,26 @@ onUnmounted(() => {
 
 <style scoped>
 .dusk {
-  --bg:    #151922;
-  --bg-2:  #1d232d;
-  --bg-3:  #242b36;
-  --bg-4:  #2d3542;
-  --bd:    rgba(191, 203, 218, 0.14);
-  --bd-2:  rgba(191, 203, 218, 0.22);
-  --tx:    #edf1f6;
-  --tx-2:  #aeb9c7;
-  --tx-3:  #778394;
-  --tx-4:  #4f5b6b;
-  --pri:   #8bd8ff;
-  --pri-h: #66c7f5;
-  --platform-wash: rgba(79, 195, 173, 0.06);
-  --blue:  #8bd8ff;
-  --red:   #f26f6f;
-  --amber: #e0b154;
+  --bg:    #edf8ff;
+  --bg-2:  #fbfdff;
+  --bg-3:  #f1f9fe;
+  --bg-4:  #ddecf8;
+  --bd:    rgba(67, 151, 194, 0.18);
+  --bd-2:  rgba(67, 151, 194, 0.28);
+  --tx:    #143045;
+  --tx-2:  #486b82;
+  --tx-3:  #7b9aae;
+  --tx-4:  #a8bdca;
+  --pri:   #5ebef2;
+  --pri-h: #43aee6;
+  --on-pri:#062235;
+  --platform-wash: rgba(94, 190, 242, 0.16);
+  --blue:  #5ebef2;
+  --red:   #d85f5f;
+  --amber: #a87419;
   --purple:#a78bfa;
-  --cyan:  #8bd8ff;
-  --green: #50c878;
+  --cyan:  #4cb9e8;
+  --green: #1d9f53;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 
@@ -863,7 +864,8 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100vh;
   background:
-    linear-gradient(180deg, var(--platform-wash), transparent 26%),
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--pri) 18%, transparent), transparent 30%),
+    linear-gradient(180deg, var(--platform-wash), transparent 30%),
     var(--bg);
   color: var(--tx);
   font-family: var(--font-sans);
@@ -872,19 +874,20 @@ onUnmounted(() => {
 }
 
 .dusk.light {
-  --bg:    #eef1f5;
+  --bg:    #edf8ff;
   --bg-2:  #fbfcfe;
-  --bg-3:  #f3f5f8;
-  --bg-4:  #e7ebf0;
-  --bd:    rgba(43, 59, 79, 0.13);
-  --bd-2:  rgba(43, 59, 79, 0.20);
-  --tx:    #17202b;
-  --tx-2:  #526173;
-  --tx-3:  #8491a2;
-  --tx-4:  #b2bbc7;
+  --bg-3:  #f1f9fe;
+  --bg-4:  #ddecf8;
+  --bd:    rgba(67, 151, 194, 0.18);
+  --bd-2:  rgba(67, 151, 194, 0.28);
+  --tx:    #143045;
+  --tx-2:  #486b82;
+  --tx-3:  #7b9aae;
+  --tx-4:  #a8bdca;
   --pri:   #5ebef2;
   --pri-h: #42aee7;
-  --platform-wash: rgba(94, 190, 242, 0.08);
+  --on-pri:#062235;
+  --platform-wash: rgba(94, 190, 242, 0.16);
   --red:   #c94c4c;
   --amber: #9a6c16;
   --purple:#7158c8;
@@ -892,9 +895,10 @@ onUnmounted(() => {
   --green: #15834f;
 }
 .dusk.platform-windows {
-  --pri:   #8bd8ff;
-  --pri-h: #66c7f5;
-  --platform-wash: rgba(139, 216, 255, 0.10);
+  --pri:   #5ebef2;
+  --pri-h: #43aee6;
+  --blue:  #5ebef2;
+  --platform-wash: rgba(94, 190, 242, 0.16);
 }
 .dusk.platform-linux {
   --pri:   #d99a45;
@@ -956,7 +960,7 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--bd);
   flex-shrink: 0;
   gap: 24px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 10px 30px rgba(56, 139, 184, 0.12);
   backdrop-filter: blur(16px);
 }
 .d-brand {
@@ -1065,7 +1069,7 @@ onUnmounted(() => {
   border: 1px solid var(--bd);
   border-radius: 12px;
   background: color-mix(in srgb, var(--bg-2) 78%, transparent);
-  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 18px 45px rgba(56, 139, 184, 0.13);
   transition: background-color 0.28s ease, border-color 0.28s ease;
 }
 .d-top-full {
@@ -1222,7 +1226,7 @@ onUnmounted(() => {
   border-radius: 12px;
   font-size: 11px;
   color: var(--tx-2);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 14px 40px rgba(56, 139, 184, 0.18);
   backdrop-filter: blur(12px);
   z-index: 20;
 }
@@ -1294,7 +1298,7 @@ onUnmounted(() => {
   border: 1px solid var(--bd);
   border-radius: 12px;
   background: color-mix(in srgb, var(--bg-2) 78%, transparent);
-  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 18px 45px rgba(56, 139, 184, 0.13);
   transition: background-color 0.28s ease, border-color 0.28s ease;
 }
 
@@ -1553,7 +1557,7 @@ onUnmounted(() => {
   transition: all 0.12s;
 }
 .d-vnc-btn:hover { border-color: var(--tx-3); color: var(--tx); }
-.d-vnc-btn.pri { background: var(--pri); color: var(--bg); border-color: var(--pri); }
+.d-vnc-btn.pri { background: var(--pri); color: var(--on-pri); border-color: var(--pri); }
 .d-vnc-btn.pri:hover { background: var(--pri-h); }
 .d-vnc-btn.icon-only {
   width: 34px;

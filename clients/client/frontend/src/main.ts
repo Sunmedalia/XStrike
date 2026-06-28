@@ -6,8 +6,15 @@ import App from './App.vue'
 import { setRouter } from './services/api'
 
 const THEME_KEY = 'ghost-theme'
-const savedTheme = localStorage.getItem(THEME_KEY)
-const initialTheme = savedTheme === 'light' ? 'light' : 'dark'
+const THEME_MIGRATION_KEY = 'xstrike-theme-migration'
+const THEME_MIGRATION_VALUE = 'light-blue-console'
+let savedTheme = localStorage.getItem(THEME_KEY)
+if (localStorage.getItem(THEME_MIGRATION_KEY) !== THEME_MIGRATION_VALUE) {
+  savedTheme = 'light'
+  localStorage.setItem(THEME_KEY, savedTheme)
+  localStorage.setItem(THEME_MIGRATION_KEY, THEME_MIGRATION_VALUE)
+}
+const initialTheme = savedTheme === 'dark' ? 'dark' : 'light'
 document.documentElement.setAttribute('data-theme', initialTheme)
 
 const app = createApp(App)

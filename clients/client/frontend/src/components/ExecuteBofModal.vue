@@ -162,6 +162,6 @@ const submit = async () => {
   background: var(--bg-3);
   color: var(--tx);
 }
-.btn.primary { background: var(--pri); color: var(--bg); border: none; }
+.btn.primary { background: var(--pri); color: var(--on-pri, #062235); border: none; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

@@ -141,6 +141,6 @@ watch(form, () => {
 .hint { font-size: 10px; color: var(--tx-4); margin-top: 6px; font-style: italic; }
 .modal-footer { padding: 12px 16px; border-top: 1px solid var(--bd); display: flex; justify-content: flex-end; gap: 10px; }
 .btn { padding: 8px 16px; border-radius: 4px; font-size: 12px; cursor: pointer; border: 1px solid var(--bd); background: var(--bg-3); color: var(--tx); font-weight: 600; }
-.btn.primary { background: var(--pri); color: var(--bg); border: none; }
+.btn.primary { background: var(--pri); color: var(--on-pri, #062235); border: none; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
