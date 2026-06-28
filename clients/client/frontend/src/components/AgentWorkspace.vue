@@ -9,6 +9,7 @@
       <div class="workspace-switch">
         <button class="workspace-btn" :class="{ active: activeView === 'cmd' }" @click="setView('cmd')">CMD</button>
         <button class="workspace-btn" :class="{ active: activeView === 'powershell' }" @click="setView('powershell')">PowerShell</button>
+        <button class="workspace-btn" :class="{ active: activeView === 'winapi' }" @click="setView('winapi')">WinAPI</button>
         <button class="workspace-btn" :class="{ active: activeView === 'files' }" @click="setView('files')">Files</button>
         <button class="workspace-btn" :class="{ active: activeView === 'processes' }" @click="setView('processes')">Processes</button>
         <button class="workspace-btn" :class="{ active: activeView === 'persistence' }" @click="setView('persistence')">Persistence</button>
@@ -30,7 +31,7 @@
 
     <div class="workspace-body">
       <Terminal
-        v-if="activeView === 'cmd' || activeView === 'powershell'"
+        v-if="activeView === 'cmd' || activeView === 'powershell' || activeView === 'winapi'"
         :targetId="targetId"
         :hideModebar="true"
         :forcedExecMode="activeView"
@@ -123,6 +124,7 @@ const viewHint = computed(() => {
   switch (activeView.value) {
     case 'cmd': return 'Native shell'
     case 'powershell': return 'Scripted ops'
+    case 'winapi': return 'Direct CreateProcessA (no shell)'
     case 'files': return 'Remote file browser'
     case 'processes': return 'Process inspection'
     case 'persistence': return 'Persistence operations'
@@ -182,6 +184,7 @@ watch(() => props.initialView, (next) => {
 }
 .workspace-dot.dot-cmd { background: var(--blue); box-shadow: 0 0 8px rgba(88, 166, 255, 0.75); }
 .workspace-dot.dot-powershell { background: var(--pri); box-shadow: 0 0 8px rgba(64, 196, 99, 0.75); }
+.workspace-dot.dot-winapi { background: var(--amber); box-shadow: 0 0 8px rgba(210, 153, 34, 0.75); }
 .workspace-dot.dot-files,
 .workspace-dot.dot-processes,
 .workspace-dot.dot-persistence,
