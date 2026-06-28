@@ -16,6 +16,13 @@ import type { Router } from 'vue-router'
 let _router: Router | null = null
 export function setRouter(r: Router) { _router = r }
 
+const LOGIN_ERROR_MESSAGE = '账号或者密码错误'
+
+function isLoginRequest(error: any): boolean {
+  const url = String(error?.config?.url || '')
+  return url === '/auth/login' || url.endsWith('/api/auth/login') || url.endsWith('/auth/login')
+}
+
 /**
  * Shared axios instance.
  *
@@ -71,7 +78,9 @@ api.interceptors.response.use(
       } catch (e) {}
     }
 
-    if (error.response?.status === 401) {
+    if ((error.response?.status === 401 || error.response?.status === 403) && isLoginRequest(error)) {
+      if (!silent) toast.error(LOGIN_ERROR_MESSAGE)
+    } else if (error.response?.status === 401) {
       localStorage.removeItem('token')
       try { await SetAuthToken('') } catch { /* desktop bridge may be unavailable */ }
       const connStore = useConnectionStore()
@@ -83,7 +92,7 @@ api.interceptors.response.use(
           _router.push('/login')
         }
       }
-      if (!silent) toast.error('Session expired')
+      if (!silent) toast.error('登录已过期，请重新登录')
     } else if (!silent) {
       const msg = error.response?.data?.error || error.message
       toast.error(msg)

@@ -44,7 +44,7 @@ import { isDesktop } from '../runtime/platform'
 import { MOCK_TOKEN, setMockMode } from '../services/mockMode'
 
 const THEME_KEY = 'ghost-theme'
-const isLight = ref(localStorage.getItem(THEME_KEY) === 'light')
+const isLight = ref(localStorage.getItem(THEME_KEY) !== 'dark')
 const logoSrc = computed(() => asset(isLight.value ? '/ico/xstrike-icon-light.png' : '/ico/xstrike-icon-dark.png'))
 const toggleTheme = () => {
   isLight.value = !isLight.value
@@ -79,7 +79,10 @@ const handleLogin = async () => {
       router.push('/')
     }
   } catch (err: any) {
-    error.value = err.response?.data?.error || 'Login failed'
+    const status = err.response?.status
+    error.value = status === 401 || status === 403
+      ? '账号或者密码错误'
+      : (err.response?.data?.error || '登录失败')
   } finally {
     loading.value = false
   }
@@ -89,23 +92,24 @@ const handleLogin = async () => {
 
 <style scoped>
 .dusk-login {
-  --bg:    #eef8ff;
-  --panel: #fbfdff;
-  --field: #f2f9fe;
-  --bd:    rgba(68, 148, 195, 0.18);
-  --tx:    #143045;
-  --tx-2:  #4c7088;
-  --tx-3:  #7c9cb1;
-  --pri:   #5ebef2;
-  --pri-h: #42aee7;
+  --bg:    #101820;
+  --panel: #17242e;
+  --field: #1d2f3b;
+  --bd:    rgba(139, 216, 255, 0.16);
+  --tx:    #eaf6fc;
+  --tx-2:  #b6c8d4;
+  --tx-3:  #8299a8;
+  --pri:   #8bd8ff;
+  --pri-h: #66c7f5;
   --red:   #ee6b6b;
+  --wash:  rgba(139, 216, 255, 0.16);
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 
   position: fixed;
   inset: 0;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(231, 247, 255, 0.72)),
+    radial-gradient(circle at 50% 12%, var(--wash), transparent 34%),
     var(--bg);
   display: flex;
   align-items: center;
@@ -125,6 +129,7 @@ const handleLogin = async () => {
   --pri:   #5ebef2;
   --pri-h: #42aee7;
   --red:   #c94c4c;
+  --wash:  rgba(94, 190, 242, 0.18);
 }
 
 .login-card {

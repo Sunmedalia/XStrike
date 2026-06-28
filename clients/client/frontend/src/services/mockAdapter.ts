@@ -40,6 +40,8 @@ import {
 import * as Wails from './wailsBindings'
 import { getRealLogs, pushRealLog, eventToLog } from './realBackend'
 
+const LOGIN_ERROR_MESSAGE = '账号或者密码错误'
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -211,7 +213,12 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
   // ── auth ────────────────────────────────────────────────────────────────
   if (method === 'post' && path === '/auth/login') {
     const body = parseBody(config)
-    const token = await Wails.Login(String(body?.username || ''), String(body?.password || ''))
+    let token = ''
+    try {
+      token = await Wails.Login(String(body?.username || ''), String(body?.password || ''))
+    } catch {
+      fail(config, LOGIN_ERROR_MESSAGE, 401)
+    }
     return ok(config, { success: true, data: { token } })
   }
   await syncRealAuthToken()

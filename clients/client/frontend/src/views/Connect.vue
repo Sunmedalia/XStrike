@@ -165,8 +165,8 @@ async function handleConnect() {
   } catch (err: any) {
     if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
       error.value = `Connection timed out — is the server running at ${target}?`
-    } else if (err.response?.status === 401) {
-      error.value = 'Invalid username or password'
+    } else if (err.response?.status === 401 || err.response?.status === 403) {
+      error.value = '账号或者密码错误'
     } else if (err.response?.data?.error) {
       error.value = err.response.data.error
     } else if (err.message?.includes('Network Error')) {

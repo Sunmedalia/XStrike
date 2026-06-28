@@ -47,6 +47,27 @@
   --green: #1d9f53;
 }
 
+[data-theme='dark'] {
+  --bg: #101820;
+  --bg-2: #17242e;
+  --bg-3: #1d2f3b;
+  --bg-4: #27404f;
+  --bd: rgba(139, 216, 255, 0.16);
+  --tx: #eaf6fc;
+  --tx-2: #b6c8d4;
+  --tx-3: #8299a8;
+  --tx-4: #556b7a;
+  --pri: #8bd8ff;
+  --pri-h: #66c7f5;
+  --on-pri: #062235;
+  --blue: #8bd8ff;
+  --red: #f26f6f;
+  --amber: #e0b154;
+  --purple: #a78bfa;
+  --cyan: #8bd8ff;
+  --green: #50c878;
+}
+
 body {
   margin: 0;
   padding: 0;

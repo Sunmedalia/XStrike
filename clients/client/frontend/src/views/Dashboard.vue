@@ -836,26 +836,26 @@ onUnmounted(() => {
 
 <style scoped>
 .dusk {
-  --bg:    #edf8ff;
-  --bg-2:  #fbfdff;
-  --bg-3:  #f1f9fe;
-  --bg-4:  #ddecf8;
-  --bd:    rgba(67, 151, 194, 0.18);
-  --bd-2:  rgba(67, 151, 194, 0.28);
-  --tx:    #143045;
-  --tx-2:  #486b82;
-  --tx-3:  #7b9aae;
-  --tx-4:  #a8bdca;
-  --pri:   #5ebef2;
-  --pri-h: #43aee6;
+  --bg:    #101820;
+  --bg-2:  #17242e;
+  --bg-3:  #1d2f3b;
+  --bg-4:  #27404f;
+  --bd:    rgba(139, 216, 255, 0.16);
+  --bd-2:  rgba(139, 216, 255, 0.24);
+  --tx:    #eaf6fc;
+  --tx-2:  #b6c8d4;
+  --tx-3:  #8299a8;
+  --tx-4:  #556b7a;
+  --pri:   #8bd8ff;
+  --pri-h: #66c7f5;
   --on-pri:#062235;
-  --platform-wash: rgba(94, 190, 242, 0.16);
-  --blue:  #5ebef2;
-  --red:   #d85f5f;
-  --amber: #a87419;
+  --platform-wash: rgba(139, 216, 255, 0.08);
+  --blue:  #8bd8ff;
+  --red:   #f26f6f;
+  --amber: #e0b154;
   --purple:#a78bfa;
-  --cyan:  #4cb9e8;
-  --green: #1d9f53;
+  --cyan:  #8bd8ff;
+  --green: #50c878;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 
@@ -895,10 +895,10 @@ onUnmounted(() => {
   --green: #15834f;
 }
 .dusk.platform-windows {
-  --pri:   #5ebef2;
-  --pri-h: #43aee6;
-  --blue:  #5ebef2;
-  --platform-wash: rgba(94, 190, 242, 0.16);
+  --pri:   #8bd8ff;
+  --pri-h: #66c7f5;
+  --blue:  #8bd8ff;
+  --platform-wash: rgba(139, 216, 255, 0.10);
 }
 .dusk.platform-linux {
   --pri:   #d99a45;
