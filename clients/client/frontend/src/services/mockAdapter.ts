@@ -277,7 +277,8 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
     const host = String(body?.host || '')
     const port = String(body?.port || '')
     const name = String(body?.name || '')
-    const r = await Wails.BuildStubToProject(host, port, name)
+    const silent = Boolean(body?.silent)
+    const r = await Wails.BuildStubToProject(host, port, name, silent)
     return ok(config, { success: true, data: { path: r.path } })
   }
   // Persistent agent roster + artifacts.
