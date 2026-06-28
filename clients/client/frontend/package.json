@@ -1,0 +1,29 @@
+{
+  "name": "xstrike-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:client": "vite --config vite.config.client.ts",
+    "build": "npm run typecheck && vite build",
+    "build:client": "npm run typecheck && vite build --config vite.config.client.ts",
+    "typecheck": "vue-tsc --noEmit",
+    "preview": "vite preview",
+    "preview:client": "vite preview --config vite.config.client.ts"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "dompurify": "^3.4.11",
+    "lucide-vue-next": "^0.344.0",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.1.4",
+    "vue-tsc": "^1.8.27"
+  }
+}

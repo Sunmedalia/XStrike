@@ -14,7 +14,7 @@ use std::net::TcpStream;
 /// reverse-connects to a baked-in host:port without CLI args. Layout:
 ///   <exe bytes>... "RUSTSTRIKE\x01" <host> "\x00" <port> "\x00"
 /// The implant reads the last ~512 bytes of its own exe to find it; if absent
-/// it falls back to args[1]/args[2]. See tools/stubbuilder + clients/go-server
+/// it falls back to args[1]/args[2]. See tools/stubbuilder + clients/server
 /// stub_patcher.go.
 const TRAILER_MAGIC: &[u8] = b"RUSTSTRIKE\x01";
 

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/ico/index_ico.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>XStrike Client</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="boot-error" style="display:none;position:fixed;top:20px;left:20px;right:20px;background:#1a1a2e;color:#f85149;padding:20px;border-radius:8px;font-family:monospace;font-size:13px;white-space:pre-wrap;z-index:99999;border:1px solid #f85149"></div>
+    <script>
+      window.onerror = function(msg, src, line, col, err) {
+        var el = document.getElementById('boot-error');
+        el.style.display = 'block';
+        el.textContent = 'JS Error: ' + msg + '\nSource: ' + src + ':' + line + ':' + col + '\n' + (err && err.stack || '');
+      };
+      window.addEventListener('unhandledrejection', function(e) {
+        var el = document.getElementById('boot-error');
+        el.style.display = 'block';
+        el.textContent = 'Unhandled Promise: ' + (e.reason && e.reason.stack || e.reason || e);
+      });
+    </script>
+    <script type="module" src="/src/main.client.ts"></script>
+  </body>
+</html>

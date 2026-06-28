@@ -76,9 +76,14 @@ pub extern "C" fn rt_strlen(s: *const u8) -> usize {
 /// buffer) touch memory the OS hasn't committed yet and fault. So we probe.
 pub extern "C" fn rt_chkstk() {
     // rax carries the requested allocation size (x64 __chkstk / ___chkstk_ms
-    // ABI). We don't read it from Rust — the asm below uses the live hardware
-    // value — but `inout` requires a Rust-side value, so pass a dummy.
-    let _: usize;
+    // ABI). The routine must probe each 4 KiB page between the current rsp and
+    // rsp - size so Windows commits the stack, then return with rax PRESERVED
+    // (the caller does `sub rsp, rax` after the call). Returning the wrong rax
+    // (e.g. 0) makes the caller skip its frame allocation and fault on locals.
+    //
+    // We must NOT provide rax as an asm input — that would overwrite the live
+    // size with the input value. Declaring it `out` only keeps the caller's rax
+    // live at the asm boundary.
     unsafe {
         core::arch::asm!(
             "mov r11, rax",          // save original request size
@@ -90,7 +95,7 @@ pub extern "C" fn rt_chkstk() {
             "jg 2b",                  // while rax > 0, keep probing
             "mov rax, r11",           // restore original request size
             page = const 0x1000usize,
-            inout("rax") 0usize => _,
+            out("rax") _,
             out("r10") _,
             out("r11") _,
             options(nostack),
@@ -655,5 +660,45 @@ mod component_bof_tests {
         assert!(out.contains("winapi_exec: whoami.exe"), "expected banner, got: {out:?}");
         assert!(out.trim().len() > "winapi_exec: whoami.exe (exit 0)".len(),
                 "expected whoami output beyond the banner, got: {out:?}");
+    }
+
+    /// Runs the sysinfo recon BOF (no args). It collects host fields as
+    /// KEY=VALUE lines (internal_ip, external_ip, user, computer, process,
+    /// pid, os, os_build, arch, online_time) — the Go core auto-runs this on
+    /// every implant connect and parses the output. The external-IP lookup
+    /// hits ifconfig.me over the network; offline it falls back to
+    /// "(unreachable)", so we only assert the local fields + format.
+    /// Requires examples/sysinfo.x64.o built.
+    #[test]
+    fn run_sysinfo() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/sysinfo.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/sysinfo.x64.o not built"); return; }
+        };
+        let out = run_bof(&bof, b"").expect("sysinfo should succeed");
+        eprintln!("SYSINFO OUTPUT:\n{out}");
+        assert!(!out.contains("sysinfo:"), "BOF reported error: {out}");
+        // KEY=VALUE format with the fields the agent table expects.
+        for key in ["internal_ip=", "external_ip=", "user=", "computer=", "process=", "pid=", "os=", "arch="] {
+            assert!(out.contains(key), "expected {key:?} line, got: {out:?}");
+        }
+    }
+
+    /// Runs bof_whoami from the project-root bofs/ tree (no args, shells out to
+    /// whoami.exe via CreateProcessA). Proves the bofs/ tree BOFs — which use
+    /// the CS4.x beacon.h + raw BeaconOutput — load and run under the loader.
+    /// Requires clients/server/bofs/bof_whoami.x64.o staged.
+    #[test]
+    fn run_bof_whoami() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../clients/server/bofs/bof_whoami.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: bof_whoami.x64.o not staged"); return; }
+        };
+        let out = run_bof(&bof, b"").expect("bof_whoami should succeed");
+        eprintln!("BOF_WHOAMI OUTPUT:\n{out}");
+        // whoami.exe prints the user; just assert non-empty output.
+        assert!(out.trim().len() > 0, "expected whoami output, got: {out:?}");
     }
 }

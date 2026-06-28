@@ -15,9 +15,9 @@
 #
 # Prereqs (built if missing):
 #   - target\release\ruststrike-implant.exe   (cargo build --release)
-#   - clients\go-server\go-server.exe         (go build)
-#   - clients\wails-gui\build\bin\wails-gui.exe (wails build)
-#   - clients\go-server\bofs\*.x64.o          (gcc -c examples/*.c + copy)
+#   - clients\server\server.exe         (go build)
+#   - clients\client\build\bin\xstrike.exe (wails build)
+#   - clients\server\bofs\*.x64.o          (gcc -c examples/*.c + copy)
 
 [CmdletBinding()]
 param(
@@ -33,9 +33,9 @@ Set-Location $root
 
 # --- locate toolchain binaries -------------------------------------------------
 $implantExe = Join-Path $root 'target\release\ruststrike-implant.exe'
-$coreExe    = Join-Path $root 'clients\go-server\go-server.exe'
-$guiExe     = Join-Path $root 'clients\wails-gui\build\bin\wails-gui.exe'
-$bofsDir    = Join-Path $root 'clients\go-server\bofs'
+$coreExe    = Join-Path $root 'clients\server\server.exe'
+$guiExe     = Join-Path $root 'clients\client\build\bin\xstrike.exe'
+$bofsDir    = Join-Path $root 'clients\server\bofs'
 
 function Ensure-Built($label, $exe, $buildCmd, $buildCwd) {
   if (Test-Path $exe) { Write-Host "[ok] $label found" -ForegroundColor DarkGray; return }
@@ -48,13 +48,13 @@ function Ensure-Built($label, $exe, $buildCmd, $buildCwd) {
 
 function Ensure-Bofs() {
   if (-not (Test-Path $bofsDir)) { New-Item -ItemType Directory -Force $bofsDir | Out-Null }
-  $expected = @('hello','cmd_exec','powershell_exec','winapi_exec','ps','proc_list','proc_kill','ls','file_list','download','file_download','screenshot','upload','shellcode_exec','shellcode_exec_nt')
+  $expected = @('hello','cmd_exec','powershell_exec','winapi_exec','ps','proc_list','proc_kill','ls','file_list','download','file_download','screenshot','upload','shellcode_exec','shellcode_exec_nt','sysinfo','bof_whoami','proc_critical_set','proc_critical_unset','schtask_persist','schtask_persist_xml','schtask_persist_reg','svc_create_api','user_create_net','user_create_cmd','user_create_ps')
   $have = @(Get-ChildItem -Path $bofsDir -Filter '*.x64.o' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName })
   $missing = $expected | Where-Object { $have -notcontains $_ }
   if ($missing.Count -eq 0) { Write-Host "[ok] BOF library has $($have.Count) BOF(s)" -ForegroundColor DarkGray; return }
   Write-Host "[build] staging BOFs into $bofsDir (missing: $($missing -join ', '))..." -ForegroundColor Yellow
   $examples = Join-Path $root 'examples'
-  foreach ($c in @('hello.c','cmd_exec.c','powershell_exec.c','winapi_exec.c','ps.c','proc_list.c','proc_kill.c','ls.c','file_list.c','download.c','file_download.c','screenshot.c','upload.c','shellcode_exec.c','shellcode_exec_nt.c')) {
+  foreach ($c in @('hello.c','cmd_exec.c','powershell_exec.c','winapi_exec.c','ps.c','proc_list.c','proc_kill.c','ls.c','file_list.c','download.c','file_download.c','screenshot.c','upload.c','shellcode_exec.c','shellcode_exec_nt.c','sysinfo.c')) {
     $src = Join-Path $examples $c
     $obj = Join-Path $examples ([IO.Path]::GetFileNameWithoutExtension($c) + '.x64.o')
     if (-not (Test-Path $obj)) {
@@ -63,13 +63,25 @@ function Ensure-Bofs() {
     }
     if (Test-Path $obj) { Copy-Item $obj $bofsDir -Force }
   }
+  # Project-root bofs/ tree: the richer CS-packed BOF library (persistence,
+  # user_mgmt, process, recon). Built with -I bofs so #include "beacon.h"
+  # resolves. Only the BOFs not already provided by examples/ are staged.
+  $bofsTree = Join-Path $root 'bofs'
+  foreach ($c in @('info\bof_whoami.c','process\proc_critical_set.c','process\proc_critical_unset.c','persistence\schtask_persist.c','persistence\schtask_persist_xml.c','persistence\schtask_persist_reg.c','persistence\svc_create_api.c','user_mgmt\user_create_net.c','user_mgmt\user_create_cmd.c','user_mgmt\user_create_ps.c')) {
+    $src = Join-Path $bofsTree $c
+    if (-not (Test-Path $src)) { continue }
+    $base = [IO.Path]::GetFileNameWithoutExtension($c)
+    $obj = Join-Path $bofsDir ($base + '.x64.o')
+    & gcc -I $bofsTree -c $src -o $obj
+    if ($LASTEXITCODE -ne 0) { Write-Warning "  gcc failed on $c ... skipping (BOF optional)" }
+  }
   $n = @(Get-ChildItem -Path $bofsDir -Filter '*.x64.o').Count
   Write-Host "[ok] BOF library now has $n BOF(s)" -ForegroundColor Green
 }
 
 Ensure-Built 'Rust implant'  $implantExe { cargo build --release -p ruststrike-implant } $root
-Ensure-Built 'Go core'      $coreExe    { Push-Location (Join-Path $root 'clients\go-server'); go build -o $coreExe .; Pop-Location } $root
-Ensure-Built 'Wails GUI'    $guiExe     { wails build } (Join-Path $root 'clients\wails-gui')
+Ensure-Built 'Go core'      $coreExe    { Push-Location (Join-Path $root 'clients\server'); go build -o $coreExe .; Pop-Location } $root
+Ensure-Built 'Wails GUI'    $guiExe     { wails build } (Join-Path $root 'clients\client')
 Ensure-Bofs
 
 # --- launch -------------------------------------------------------------------

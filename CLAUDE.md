@@ -66,15 +66,15 @@ The protocol is newline-delimited JSON over a single TCP stream. `crates/protoco
 - `hello`: `{"type":"hello"}`. Extra fields on the `hello` variant are tolerated (serde ignores unknown fields), but keep it minimal.
 - Implant→server replies: `{"type":"hello|output|error","data":"<utf8 string>"}`.
 - Each message is one line terminated by `\n`. Implant output can be large — use a generous line buffer.
-- A reference Go server lives in `clients/go-server/` and is verified to drive the Rust implant (hello + load + loadb, incl. the Extension-Kit nbtscan BOF).
+- A reference Go server lives in `clients/server/` and is verified to drive the Rust implant (hello + load + loadb, incl. the Extension-Kit nbtscan BOF).
 
-### Go service core (`clients/go-server/`)
+### Go service core (`clients/server/`)
 
 A standalone operator-facing service (step C of the multi-language plan; the GUI in step B talks to this). Two listeners:
 - **TCP** (default `:4444`) — implant transport, same newline-JSON wire contract.
 - **HTTP/WS** (default `:8091`) — REST + WebSocket for the GUI.
 
-Run: `go-server [tcp-port] [http-port]`. BOF library dir: `RUSTSTRIKE_BOFS` env, else `./bofs` next to the exe. SQLite DB: `RUSTSTRIKE_DB` env, else `./ruststrike.db` next to the exe. Base implant exe for the stub builder: `RUSTSTRIKE_IMPLANT_EXE` env, else `./ruststrike-implant.exe` next to the exe, else the repo-relative `../../target/release/ruststrike-implant.exe`. Build: `cd clients/go-server && go build` (first external dep: `modernc.org/sqlite`, pure-Go, no cgo).
+Run: `server [tcp-port] [http-port]`. BOF library dir: `RUSTSTRIKE_BOFS` env, else `./bofs` next to the exe. SQLite DB: `RUSTSTRIKE_DB` env, else `./ruststrike.db` next to the exe. Base implant exe for the stub builder: `RUSTSTRIKE_IMPLANT_EXE` env, else `./ruststrike-implant.exe` next to the exe, else the repo-relative `../../target/release/ruststrike-implant.exe`. Build: `cd clients/server && go build` (first external dep: `modernc.org/sqlite`, pure-Go, no cgo).
 
 Files: `session.go` (multi-implant session manager, one reader goroutine each; also captures BOF output as artifacts + touches the agent roster on connect), `bus.go` (event pub/sub), `ws.go` (dependency-free RFC6455 server, pushes `Event`s), `api.go` (REST routing), `boflib.go`+`boflib_api.go` (BOF library index + upload/run), `task.go` (BOF task-result store; records the BOF name for artifact routing), `protocol.go` (wire types mirroring `crates/protocol`), `store.go` (SQLite: logs/listeners/agents/artifacts, WAL, batched log writer), `listeners.go`+`listeners_api.go` (runtime TCP listener start/stop), `logs_api.go` (`/api/logs` from SQLite), `agents_api.go`+`artifacts_api.go` (`/api/agents`, `/api/agents/{id}/artifacts`), `stub_patcher.go`+`/api/stub/build`+`/api/stub/save` (implant exe trailer patcher).
 
@@ -86,30 +86,36 @@ REST: `GET /api/implants`, `POST /api/implants/{id}/hello`, `POST /api/implants/
 
 **BOF task correlation (`task.go`).** RustStrike BOFs are synchronous and one-shot — the implant runs the BOF to completion, then sends exactly one `output` (or `error`) message. So a BOF run creates a task (`tasks.Create(implantID)`, BEFORE `Send` so a fast reply can't race it), and the NEXT `output`/`error` event for that implant completes it (`tasks.Feed`, called from `session.go` readLoop). The GUI polls `GET /api/tasks/{id}` to pull the result — this bridges RustStrike's fire-and-forget event model onto the request/response task-polling the Ghost UI expects. One active task per implant at a time (Create supersedes the prior); a reaper trims tasks older than 10 min.
 
+**Sysinfo auto-collect (`sysinfo.go` + `examples/sysinfo.c`).** On every implant connect, the core auto-runs the `sysinfo` recon BOF (no args) so the agent table populates immediately. The BOF emits `KEY=VALUE` lines (`internal_ip`, `external_ip` via `http://ifconfig.me/ip`, `user`, `computer`, `process`, `pid`, `os`+`os_build` via `NTDLL$RtlGetVersion`, `arch`, `online_time`). The readLoop intercepts that output BEFORE the task store (a `SysinfoCollector` holds a per-implant pending marker for 30 s) so it doesn't collide with operator BOF tasks, parses it, persists it to the `agent_sysinfo` table, and publishes a `sysinfo` event → the GUI refetches `/api/implants`, which is enriched (`ListEnriched`) with the recon fields. `/api/agents` (roster) carries the same fields so history survives a restart. The BOF makes an outbound call to ifconfig.me (OPSEC note); if unreachable it reports `(unreachable)`.
+
 Verified end-to-end with the Rust implant: session list, hello, BOF-by-b64, BOF-by-name (nbtscan/ps/ls/cmd_exec/download/upload, plus the component-driven proc_list/proc_kill/file_list/file_download/screenshot/powershell_exec/shellcode_exec/shellcode_exec_nt), task-poll output, and live WebSocket event push all work.
 
-### Wails GUI (`clients/wails-gui/`)
+### Wails GUI (`clients/client/`)
 
-Step B: a desktop operator console. Go backend via Wails v2; the frontend is a self-contained Vue 3 + TS + Pinia + vue-router console ("Ghost UI") that was integrated from `frontend/` into `clients/wails-gui/frontend/`. In desktop mode it drives the **real** Rust implant via the Go core; a mock/demo mode is available for browser preview.
+Step B: a desktop operator console. Go backend via Wails v2; the frontend is a self-contained Vue 3 + TS + Pinia + vue-router console (branded **XStrike**) integrated from `frontend/` into `clients/client/frontend/`. In desktop mode it drives the **real** Rust implant via the Go core; a mock/demo mode is available for browser preview. Built exe: `clients/client/build/bin/xstrike.exe` (wails.json `outputfilename: xstrike`).
+
+- **Terminal exec-mode toggle** — the per-agent Terminal has a CMD / PowerShell / WinAPI switch. CMD = `cmd.exe /c` shell; WinAPI = `examples/winapi_exec.c` (direct `CreateProcessA`, no shell — no pipes/redirects/builtins); PowerShell = `powershell.exe -Command`. `modeBofPattern` picks the BOF by name (`cmd_exec`/`powershell_exec`/`winapi_exec`).
+- **Console autocomplete** — `Terminal.vue` shows a live dropdown above the input listing registry commands (name + aliases + description) whose name/alias starts with the current input. Up/Down navigate, Tab accepts the highlighted suggestion, Enter submits, Escape closes. Global console only (agent-workspace terminals run free-text shells).
+- **Brand** — all user-facing "Ghost" text was renamed to "XStrike" (titles, login/connect/dashboard, terminal prompts/banners, help header, package `xstrike-ui`, icon assets `xstrike-icon-*.png`). Internal localStorage keys (`ghost-theme`, `ghost-demo`, …) are unchanged to preserve stored prefs.
 
 - `app.go` — Wails-bound methods the frontend calls via the shim: `ListImplants`, `Hello`, `RunBofByName`/`RunBofByB64` (each returns a `task_id` string), `GetTaskResult(taskID)` (polls a BOF task → `TaskResult{status, output}`), `DropImplant`, `ListBofs`, `UploadBof`. Each wraps a core REST call.
 - `core.go` — connects to the core's `/ws`, re-emits every event to the frontend as a Wails `core:event` (auto-reconnects). Core address via `RUSTSTRIKE_CORE` (default `http://127.0.0.1:8091`).
 - `frontend/` — the integrated console. See `frontend/CLAUDE.md` for the full frontend contract. **Real-backend wiring:** `services/wailsBindings.ts` (typed shim over `window.go.main.App.*` + `window.runtime.EventsOn`, no static wailsjs imports so the build is robust without regenerated bindings), `services/realBackend.ts` (client-side event log fed by `core:event`, returned for `/logs`), `services/mockAdapter.ts` (unified axios adapter: branches mock vs real per-request — real mode maps every Ghost-UI axios call to a Wails binding), `services/mockMode.ts` (`isMockMode()`: browser OR `?demo=1`/`ghost-demo` flag → mock; desktop → real). The whole UI (stores, command registry, Terminal, modals) runs unchanged against the real backend — only the transport is swapped. `composables/useEventStream.ts` subscribes to the Wails `core:event` stream in real mode (no SSE/ticket).
 - **Mock / demo mode** — browser dev (`npm run dev`) and `?demo=1`/`localStorage.ghost-demo='1'` run off `services/mockData.ts` so the console is usable with zero backend. The Login page has an "Enter demo console" button. Clear the flag (or run the desktop exe) for real mode.
 
-Run dev (hot reload): `cd clients/wails-gui && wails dev` (vite pinned to `127.0.0.1:5173` strictPort in `frontend/vite.config.ts` to match `wails.json`). Build single exe: `wails build` → `build/bin/wails-gui.exe`. Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
+Run dev (hot reload): `cd clients/client && wails dev` (vite pinned to `127.0.0.1:5173` strictPort in `frontend/vite.config.ts` to match `wails.json`). Build single exe: `wails build` → `build/bin/xstrike.exe`. Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.
 
-Verified: `npm run build` (typecheck + vite) clean, `wails build` produces `wails-gui.exe`, and the real backend chain (core task store + implant + ps/ls/cmd_exec/download/upload) is verified end-to-end via REST. Visual/interactive GUI verification requires running `wails dev` on a desktop session.
+Verified: `npm run build` (typecheck + vite) clean, `wails build` produces `xstrike.exe`, and the real backend chain (core task store + implant + ps/ls/cmd_exec/download/upload) is verified end-to-end via REST. Visual/interactive GUI verification requires running `wails dev` on a desktop session.
 
 ### Running the whole stack
 
 ```sh
 # 1. Go service core (implant TCP :4444, operator HTTP/WS :8091)
-RUSTSTRIKE_BOFS=./clients/go-server/bofs ./clients/go-server/go-server.exe 4444 8091
+RUSTSTRIKE_BOFS=./clients/server/bofs ./clients/server/server.exe 4444 8091
 # 2. Rust implant (reverse-connects to core)
 ./target/release/ruststrike-implant.exe 127.0.0.1 4444
 # 3. GUI (desktop console over the core's API)
-cd clients/wails-gui && wails dev   # or: build/bin/wails-gui.exe
+cd clients/client && wails dev   # or: build/bin/xstrike.exe
 ```
 
 ### v1 limitations to respect when extending
@@ -153,6 +159,36 @@ BOF (`SAR-BOF/nbtscan`). To use a third-party BOF:
    + `build_external_map` as needed. `format`/token/spawn-inject APIs are not
    implemented at all.
 
+### Project-root `bofs/` tree (richer CS-packed library)
+
+`bofs/` is the expanded BOF library (persistence, user_mgmt, process, recon,
+extra shellcode) — separate from `examples/` (which drives the GUI components).
+Its BOFs use the CS4.x `beacon.h` + `BeaconDataExtract` (4-byte **big-endian**
+length-prefixed blobs) arg convention. `run-all.ps1::Ensure-Bofs` builds the
+unique `bofs/` BOFs (`-I bofs` for the header) and stages them into
+`clients/server/bofs/` alongside the `examples/` set: `bof_whoami`,
+`proc_critical_set`/`proc_critical_unset`, `schtask_persist`/`_xml`/`_reg`,
+`svc_create_api`, `user_create_net`/`_cmd`/`_ps`. (BOFs that overlap `examples/`
+— `proc_list`, `screenshot`, `cmd_exec`, … — are NOT staged from `bofs/`; the
+verified `examples/` versions are kept.)
+
+The console drives CS-packed BOFs via two encoders in `commandRegistry.ts::buildEncoder`:
+- `cs_packed` — one blob `[4-byte BE len][UTF-8]` for the joined arg line (e.g.
+  `schtask_persist <name> <schedule>`).
+- `cs_packed_multi` — one blob per token (e.g. `user_create_net <user> <pass>`).
+`mockAdapter.ts::bofCommandMetas` assigns each BOF its `encode_type`. For precise
+binary args (e.g. file contents) use `loadb <bof.o> <args.bin>` / `tools/upload_args.py`.
+
+### Component BOFs are Unicode-safe (W APIs)
+
+`examples/file_list.c` and `examples/file_download.c` use `FindFirstFileW`/
+`CreateFileW` with `MultiByteToWideChar`/`WideCharToMultiByte` (UTF-8 ↔ UTF-16),
+so non-ASCII (Chinese, etc.) paths and filenames round-trip correctly. The ANSI
+`FindFirstFileA`/`CreateFileA` variants mis-decode UTF-8 bytes as the system ACP
+(GBK on a Chinese Windows) and fail on any non-ASCII segment — which is why
+localized folders were unnavigable. Keep the W APIs. (Stack frames stay < 4 KiB
+to avoid `__chkstk` — see loader internals.)
+
 ### Loader internals worth knowing (non-obvious)
 
 - **Aux records must occupy slots.** COFF symbol-table aux records are kept as
@@ -192,6 +228,14 @@ BOF (`SAR-BOF/nbtscan`). To use a third-party BOF:
 - **`add_fn` stores function addresses, not pointer-to-local.** External stubs
   are registered by casting each `extern "C" fn` to `usize`; never revert to
   `&f as *const _`, which captures a dangling stack address.
+- **`__chkstk` must preserve `rax`.** `rt_chkstk` probes each 4 KiB page between
+  `rsp` and `rsp - rax` so Windows commits the stack, then returns with `rax`
+  *unchanged* — the BOF prologue does `sub rsp, rax` after the call. The asm
+  declares `rax` as `out` only (NOT `inout` with a dummy value, which overwrites
+  the live size with 0). The earlier `inout("rax") 0usize` bug made `__chkstk`
+  return 0, so any BOF with a frame > 4 KiB (e.g. `bof_whoami`'s `char
+  buf[4096]`, or the `bofs/` tree's large-buffer BOFs) skipped its frame
+  allocation and faulted on its locals. With the fix, arbitrary-frame BOFs run.
 
 ## Conventions
 

@@ -1,0 +1,88 @@
+{
+  "name": "test-plugin",
+  "version": "1.0.0",
+  "author": "Ghost Team",
+  "description": "Test plugin for validating BOF ZIP upload and plugin generation capabilities",
+  "min_ghost_version": "1.0.0",
+  "category": "test",
+  "commands": [
+    {
+      "name": "test-whoami",
+      "aliases": ["tw"],
+      "description": "Test: Get current user identity via plugin BOF",
+      "args": [],
+      "action": {
+        "type": "execute_bof",
+        "bof_name": "bof_whoami.o",
+        "encode_type": "none"
+      }
+    },
+    {
+      "name": "test-output",
+      "aliases": ["to"],
+      "description": "Test: Execute test output BOF",
+      "args": [],
+      "action": {
+        "type": "execute_bof",
+        "bof_name": "test_output.o",
+        "encode_type": "none"
+      }
+    }
+  ],
+  "menus": [
+    {
+      "id": "test-plugin-menu",
+      "label": "Test Plugin",
+      "location": "beacon_context_menu",
+      "icon": "🧪",
+      "children": [
+        {
+          "id": "test-whoami-item",
+          "label": "Run Whoami",
+          "icon": "👤",
+          "action": {
+            "type": "execute_bof",
+            "bof_name": "bof_whoami.o",
+            "encode_type": "none"
+          }
+        }
+      ]
+    }
+  ],
+  "panels": [
+    {
+      "id": "test-plugin-panel",
+      "title": "Test Plugin Panel",
+      "tab_location": "agent_workspace",
+      "icon": "🧪",
+      "layout": {
+        "type": "form",
+        "fields": [
+          {
+            "name": "message",
+            "label": "Test Message",
+            "type": "text",
+            "placeholder": "Enter a test message",
+            "required": false
+          }
+        ],
+        "submit": {
+          "label": "Run Test",
+          "action": {
+            "type": "execute_bof",
+            "bof_name": "test_output.o",
+            "encode_type": "none"
+          }
+        }
+      }
+    }
+  ],
+  "toolbar_buttons": [
+    {
+      "id": "test-plugin-btn",
+      "label": "Test",
+      "icon": "🧪",
+      "tooltip": "Run test plugin action"
+    }
+  ]
+}

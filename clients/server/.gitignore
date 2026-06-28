@@ -1,0 +1,6 @@
+# Go build output
+server.exe
+*.exe
+
+# Local BOF library contents (binary COFF objects, gitignored as *.o globally)
+bofs/

