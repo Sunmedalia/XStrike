@@ -25,6 +25,46 @@ cargo test --release -p ruststrike-protocol
 cargo clippy --workspace --all-targets
 ```
 
+### Implant OPSEC / stealth (release build)
+
+The release implant is scrubbed to look like an ordinary "System Update Helper"
+application rather than a BOF C2 agent. Several layers, all in the default
+release build (no flags needed):
+
+- **PE metadata** — `crates/implant/build.rs` (winres) embeds a VERSIONINFO +
+  manifest: FileDescription/ProductName/CompanyName = "System Update Helper",
+  FileVersion 10.0.22621.0, `asInvoker`, common-controls v6, Win7-11 supportedOS.
+  PDB alternate path → `updatehelper.pdb` (not `ruststrike_implant.pdb`).
+- **Debug-log gating** — the `[implant] ...` `eprintln!` strings compile out
+  unless the `verbose` feature is on (`cargo build --release --features verbose`
+  to get them back for dev). See `crates/implant/src/stealth.rs::vlog!`.
+- **Benign string padding** — `stealth.rs::BENIGN_STRINGS` (`include_str!` of
+  `benign_strings.txt`, a fake EULA, `#[used]`) dilutes the suspicious strings
+  in a `strings` dump and keeps entropy low.
+- **XOR-encoded Beacon API names** — `exec.rs::build_external_map` registers
+  `BeaconPrintf`/`BeaconOutput`/… under names decoded at runtime from XOR'd
+  byte arrays (`dec` + the `_ENC` constants), so the literals never appear in
+  `.rdata`. The decoded keys still match BOF imports, so resolution is unchanged
+  (14/14 loader tests stay green). CRT names (`memcpy`/`__chkstk`/…) are left
+  literal — every C program has them.
+- **Path remapping** — `.cargo/config.toml` `rustflags` remap workspace crate
+  paths (`crates\implant`→`app`, `crates\loader`→`core`, `crates\protocol`→`net`)
+  and the cargo registry (`C:\Users\<user>\.cargo`→`/cargo`, dropping the build
+  account name) out of panic Locations. **If you build on a different Windows
+  account, update the `C:\\Users\\<user>\\.cargo` segment.** Source files are
+  named neutrally (`stubs.rs`/`obj.rs`/`exec.rs`) so no `beacon.rs`/`coff.rs`
+  filename leaks.
+- **Opaque trailer magic** — the appended-config marker is the byte sequence
+  `0x7C 0x53 0x9A 0x2E 0xD1 0x04 0xB8 0x6F 0x11 0xA3` (not a readable word),
+  shared by `crates/implant/src/main.rs::TRAILER_MAGIC`,
+  `tools/stubbuilder/main.go`, and `clients/server/stub_patcher.go::TrailerMagic`.
+  Change it in all three together.
+
+Result: entropy ~6.39 bits/byte (normal PE range 6-7; packed malware is 7.5+),
+no `implant`/`ruststrike`/`Beacon`/`beacon.rs`/`liuxunzhang`/`[ruststrike]`
+strings, PDB reads `updatehelper.pdb`. Verified: `cargo test --release` 24/24,
+loader 14/14, Go core + stubbuilder build, implant connects + runs sysinfo.
+
 The example BOF is a C file that must be compiled to a COFF object before the
 loader/exec tests can exercise it (with the MinGW gcc toolchain, e.g. MSYS2):
 
@@ -51,7 +91,7 @@ Four crates in a single workspace. Dependency direction: `protocol` ← `server`
   - `beacon.rs` (`#[cfg(windows)]`) — the Beacon API stubs (`BeaconPrintf`, `BeaconDataParse`, …) exposed as `extern "C"` and patched into relocations. Output is captured to a thread-local `OUTPUT` buffer that `run_bof` returns.
   - `stub.rs` (`#[cfg(not(windows))]`) — `run_bof` always errors; lets the workspace compile off-Windows so parsing logic stays testable.
 - **`server`** — TCP listener (single implant), stdin console (`hello`, `load <path> [args...]`, `quit`). Reader thread decodes `ImplantMessage` lines; main loop encodes commands. `load` reads the file and base64-encodes it.
-- **`implant`** — Windows reverse-connect binary (native MSVC build). Reader thread dispatches `ServerMessage` → `handle()`; `Bof` decodes and calls `run_bof`, returning `Output`/`Error`. Callback host/port resolution: (1) appended-config trailer on the exe (`RUSTSTRIKE\x01` magic + `host\0port\0` near the end — read by `read_trailer_config`), else (2) CLI args `<host> [port]`, defaults `127.0.0.1 4444`. The trailer lets an operator deploy a patched exe that reverse-connects with no args (`tools/stubbuilder` or `POST /api/stub/build` appends it; re-patching strips the old trailer first).
+- **`implant`** — Windows reverse-connect binary (native MSVC build). Reader thread dispatches `ServerMessage` → `handle()`; `Bof` decodes and calls `run_bof`, returning `Output`/`Error`. Callback host/port resolution: (1) appended-config trailer on the exe (`RUSTSTRIKE\x01` magic + `host\0port\0` near the end — read by `read_trailer_config`; the magic is an opaque byte sequence, not a readable word, so it isn't a string-scan telltale), else (2) CLI args `<host> [port]`, defaults `127.0.0.1 4444`. The trailer lets an operator deploy a patched exe that reverse-connects with no args (`tools/stubbuilder` or `POST /api/stub/build` appends it; re-patching strips the old trailer first).
 
 ### Critical cross-file invariant
 

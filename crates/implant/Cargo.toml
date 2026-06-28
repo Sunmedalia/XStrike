@@ -3,6 +3,7 @@ name = "ruststrike-implant"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -10,3 +11,12 @@ serde_json = { workspace = true }
 base64 = { workspace = true }
 ruststrike-protocol = { path = "../protocol" }
 ruststrike-loader = { path = "../loader" }
+
+[build-dependencies]
+winres = "0.1"
+
+[features]
+default = []
+# Re-enables the [implant] ... debug eprintln! logs (compiled out by default so
+# the telltale strings never make it into the release binary). Dev only.
+verbose = []

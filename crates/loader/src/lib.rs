@@ -12,9 +12,9 @@
 // `not_unsafe_ptr_arg_deref` crate-wide rather than littering each stub.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-pub mod coff;
+pub mod obj;
 #[cfg(windows)]
-pub mod beacon;
+pub mod stubs;
 
 #[cfg(windows)]
 mod exec;

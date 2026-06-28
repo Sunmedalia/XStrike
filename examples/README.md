@@ -135,7 +135,9 @@ its own exe at startup (else falls back to CLI args). This lets you deploy ONE
 patched binary per target with a baked-in callback — no args on the target.
 
 Trailer layout (appended to the exe bytes):
-`<exe>... "RUSTSTRIKE\x01" <host> "\x00" <port> "\x00"`
+`<exe>... <magic> <host> "\x00" <port> "\x00"`
+
+`<magic>` is an opaque 10-byte sequence (`0x7C 0x53 0x9A 0x2E 0xD1 0x04 0xB8 0x6F 0x11 0xA3`), shared by `crates/implant/src/main.rs::TRAILER_MAGIC`, `tools/stubbuilder/main.go`, and `clients/server/stub_patcher.go::TrailerMagic`. It's deliberately not a readable word so it isn't a string-scan telltale — change it in all three places together.
 
 Two ways to patch a base `ruststrike-implant.exe`:
 

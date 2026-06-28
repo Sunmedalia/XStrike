@@ -1,0 +1,37 @@
+# Per-workspace cargo configuration.
+#
+# OPSEC: these rustflags scrub build-environment fingerprints from the implant
+# binary. Without them, panic Locations and `#[track_caller]` strings embed the
+# developer's home path, crate names, and PDB name — dead giveaways that the
+# "System Update Helper" exe is really `ruststrike-implant`.
+#
+# 1. Workspace crate paths → neutral names (drops the words "implant"/"loader"/
+#    "protocol" from `crates\implant\src\main.rs` etc.).
+# 2. The cargo registry source path (which contains the build machine's
+#    username: C:\Users\<user>\.cargo\registry\...) → /cargo, so third-party
+#    crate paths no longer leak the operator's Windows account.
+# 3. The PDB alternate path → the cover identity, so the embedded debug
+#    reference reads `updatehelper.pdb`, not `ruststrike_implant.pdb`.
+#
+# NOTE on (2): the registry prefix includes the build machine's username. If
+# you build on a different account, update the `C:\\Users\\<user>\\.cargo`
+# segment below (or set CARGO_HOME and adjust). The crates.io registry hash
+# `index.crates.io-6f17d22bba15001f` is stable across machines.
+
+[build]
+rustflags = [
+  # workspace crate paths (relative, as cargo passes them) — backslash form.
+  # "implant"/"loader"/"protocol" are tells → neutral names. (The source files
+  # inside are already neutral: stubs.rs / exec.rs / coff.rs / main.rs / lib.rs.)
+  "--remap-path-prefix=crates\\implant=app",
+  "--remap-path-prefix=crates\\loader=core",
+  "--remap-path-prefix=crates\\protocol=net",
+  # forward-slash form (some rustc invocations use /)
+  "--remap-path-prefix=crates/implant=app",
+  "--remap-path-prefix=crates/loader=core",
+  "--remap-path-prefix=crates/protocol=net",
+  # cargo registry — drops the build-machine username
+  "--remap-path-prefix=C:\\Users\\liuxunzhang\\.cargo=/cargo",
+  # PDB alternate path stored in the PE debug directory → cover identity
+  "-C", "link-arg=/PDBALTPATH:updatehelper.pdb",
+]

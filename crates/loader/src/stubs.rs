@@ -156,7 +156,7 @@ pub extern "C" fn beacon_is_admin() -> i32 {
 /// `CALLBACK_OUTPUT` with a few `%s`/`%d` substitutions.
 pub extern "C" fn beacon_printf(typ: i32, fmt: *const u8, a1: u64, a2: u64) {
     if fmt.is_null() {
-        append(&format!("[BeaconPrintf type={typ} null fmt]"));
+        append(&format!("[printf type={typ} null fmt]"));
         return;
     }
     unsafe {

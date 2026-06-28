@@ -32,13 +32,13 @@ pub enum ImplantMessage {
 
 impl ServerMessage {
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("server message always serializes")
+        serde_json::to_string(self).expect("serialize")
     }
 }
 
 impl ImplantMessage {
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("implant message always serializes")
+        serde_json::to_string(self).expect("serialize")
     }
 }
 
