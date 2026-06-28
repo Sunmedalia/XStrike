@@ -13,6 +13,7 @@
         <button class="workspace-btn" :class="{ active: activeView === 'files' }" @click="setView('files')">Files</button>
         <button class="workspace-btn" :class="{ active: activeView === 'processes' }" @click="setView('processes')">Processes</button>
         <button class="workspace-btn" :class="{ active: activeView === 'net' }" @click="setView('net')">Net</button>
+        <button class="workspace-btn" :class="{ active: activeView === 'pivot' }" @click="setView('pivot')">Pivot</button>
         <button class="workspace-btn" :class="{ active: activeView === 'persistence' }" @click="setView('persistence')">Persistence</button>
         <button class="workspace-btn" :class="{ active: activeView === 'shellcode' }" @click="setView('shellcode')">Shellcode</button>
         <button class="workspace-btn" :class="{ active: activeView === 'screenshots' }" @click="setView('screenshots')">Screenshots</button>
@@ -47,6 +48,10 @@
       />
       <NetConnections
         v-else-if="activeView === 'net'"
+        :targetId="targetId"
+      />
+      <PivotPanel
+        v-else-if="activeView === 'pivot'"
         :targetId="targetId"
       />
       <PersistenceManager
@@ -85,6 +90,7 @@ import Terminal from './Terminal.vue'
 import FileBrowser from './FileBrowser.vue'
 import ProcessList from './ProcessList.vue'
 import NetConnections from './NetConnections.vue'
+import PivotPanel from './PivotPanel.vue'
 import PersistenceManager from './PersistenceManager.vue'
 import ShellcodeExecutor from './ShellcodeExecutor.vue'
 import ScreenshotViewer from './ScreenshotViewer.vue'
@@ -134,6 +140,7 @@ const viewHint = computed(() => {
     case 'files': return 'Remote file browser'
     case 'processes': return 'Process inspection'
     case 'net': return 'Network connections'
+    case 'pivot': return 'Pivot / relay listeners'
     case 'persistence': return 'Persistence operations'
     case 'shellcode':    return 'Shellcode execution'
     case 'screenshots':  return 'Desktop screenshots'
@@ -195,6 +202,7 @@ watch(() => props.initialView, (next) => {
 .workspace-dot.dot-files,
 .workspace-dot.dot-processes,
 .workspace-dot.dot-net,
+.workspace-dot.dot-pivot,
 .workspace-dot.dot-persistence,
 .workspace-dot.dot-shellcode { background: var(--amber); box-shadow: 0 0 8px rgba(210, 153, 34, 0.6); }
 .workspace-dot.dot-vnc { background: var(--blue); box-shadow: 0 0 8px rgba(88, 166, 255, 0.8); animation: pulse-dot 2s ease-in-out infinite; }

@@ -114,6 +114,11 @@ func (sm *SessionManager) remove(id uint64, s *Session) {
 	delete(sm.sessions, id)
 	sm.mu.Unlock()
 	s.Close()
+	// Relay listeners live in the implant process — they're gone now. Drop the
+	// registry entries so the GUI doesn't show stale "running" relays.
+	if relayRegistry != nil {
+		relayRegistry.Cleanup(id)
+	}
 	sm.bus.Publish(Event{Type: "implant_disconnected", ImplantID: id, Data: s.Addr})
 	fmt.Fprintf(logf(), "[core] implant %s disconnected\n", s)
 }
@@ -137,7 +142,34 @@ func (s *Session) readLoop() {
 			continue
 		}
 		// Map wire type -> event type, publish to subscribers.
-		et := m.Type // "hello" | "output" | "error"
+		et := m.Type // "hello" | "output" | "error" | "relay_started" | ...
+
+		// Relay listener lifecycle: update the registry + emit a normalized
+		// relay_changed event so the GUI refetches. These are not BOF task
+		// output, so handle them before the task/artifact correlation below.
+		switch m.Type {
+		case "relay_started":
+			if relayRegistry != nil {
+				relayRegistry.OnStarted(s.ID, m.RelayID, m.BindIP, m.Port)
+			}
+			s.bus.Publish(Event{Type: "relay_changed", ImplantID: s.ID, Data: m.RelayID})
+			fmt.Fprintf(logf(), "[core] implant %s relay %s started on %s:%d\n", s, m.RelayID, m.BindIP, m.Port)
+			continue
+		case "relay_stopped":
+			if relayRegistry != nil {
+				relayRegistry.OnStopped(s.ID, m.RelayID)
+			}
+			s.bus.Publish(Event{Type: "relay_changed", ImplantID: s.ID, Data: m.RelayID})
+			fmt.Fprintf(logf(), "[core] implant %s relay %s stopped\n", s, m.RelayID)
+			continue
+		case "relay_error":
+			if relayRegistry != nil {
+				relayRegistry.OnError(s.ID, m.RelayID, m.Data)
+			}
+			s.bus.Publish(Event{Type: "relay_changed", ImplantID: s.ID, Data: m.RelayID})
+			fmt.Fprintf(logf(), "[core] implant %s relay %s error: %s\n", s, m.RelayID, m.Data)
+			continue
+		}
 
 		// Intercept the auto-run sysinfo BOF's result BEFORE normal fan-out so
 		// it doesn't collide with operator-driven BOF tasks. The first

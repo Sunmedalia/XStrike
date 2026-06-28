@@ -11,6 +11,7 @@ export interface SseCallbacks {
   onBeaconDeleted?: (data: any) => void
   onTaskCompleted?: (data: any) => void
   onListenerChanged?: (data: any) => void
+  onRelayChanged?: (data: any) => void
 }
 
 const MAX_RECONNECT_DELAY = 30_000
@@ -60,6 +61,9 @@ export function useEventStream() {
             break
           case 'listener_changed':
             callbacks.onListenerChanged?.({})
+            break
+          case 'relay_changed':
+            callbacks.onRelayChanged?.({ node_id: String(ev.implant_id) })
             break
           default:
             break

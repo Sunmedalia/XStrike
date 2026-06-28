@@ -53,6 +53,7 @@ var (
 	store          *Store
 	listenerMgr    *ListenerManager
 	sysinfoColl    *SysinfoCollector
+	relayRegistry  *RelayRegistry
 	baseImplantExe string
 	logMu          sync.Mutex
 	logOut         io.Writer = os.Stderr
@@ -81,6 +82,7 @@ func main() {
 	tasks = NewTaskStore()
 	tasks.StartReaper()
 	sysinfoColl = NewSysinfoCollector()
+	relayRegistry = NewRelayRegistry()
 
 	// SQLite store (logs + listener config + agents + artifacts). Pure-Go
 	// modernc.org/sqlite — no cgo. Path via RUSTSTRIKE_DB env, else next to exe.

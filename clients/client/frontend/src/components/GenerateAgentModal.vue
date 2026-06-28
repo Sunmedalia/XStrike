@@ -21,7 +21,7 @@
         <div class="field">
           <label>Callback Host (LHOST)</label>
           <input v-model="form.host" placeholder="e.g. 192.168.1.100" required />
-          <p class="hint">The IP address the agent will connect to</p>
+          <p class="hint">The IP address the agent will connect to. To chain through another agent, start a relay on it (Pivot tab) and enter that agent's reachable IP + the relay port here.</p>
         </div>
         <div class="field">
           <label>Sleep Time (seconds)</label>

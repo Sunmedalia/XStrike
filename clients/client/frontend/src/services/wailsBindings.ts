@@ -124,6 +124,31 @@ export async function DeleteListener(id: string): Promise<void> {
   return app().DeleteListener(id)
 }
 
+// ---- Relays (pivot listeners on an implant) ----
+
+export interface WailsRelay {
+  id: string
+  implant_id: number
+  bind_ip: string
+  port: number
+  state: string
+  error?: string
+}
+
+// StartRelay asks an implant to open a TCP pivot listener. port=0 = OS-assigned.
+// The actual bound port arrives async; poll ListRelays for it.
+export async function StartRelay(id: number, bindIP: string, port: number): Promise<WailsRelay> {
+  return app().StartRelay(id, bindIP, port)
+}
+
+export async function ListRelays(id: number): Promise<WailsRelay[]> {
+  return app().ListRelays(id)
+}
+
+export async function StopRelay(id: number, relayID: string): Promise<void> {
+  return app().StopRelay(id, relayID)
+}
+
 // ---- Stub builder ----
 
 // silent selects the GUI-subsystem base exe (no console window on launch).
