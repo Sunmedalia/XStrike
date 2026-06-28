@@ -153,6 +153,9 @@ const refreshNet = async (force = false) => {
 
   loading.value = true
   try {
+    // Ensure the BOF library is fresh — the core re-scans its bofs dir on
+    // /api/bofs, so a newly staged netstat.x64.o shows up without a restart.
+    await appStore.fetchBofs()
     const bof = findBof(/^netstat\b/i)
     if (!bof) {
       toast.error('No netstat BOF found. Upload netstat.o first.')

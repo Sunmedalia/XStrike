@@ -12,6 +12,8 @@ import (
 func bofsHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// Refresh so newly staged .x64.o files show up without a core restart.
+		boflib.Refresh()
 		writeJSON(w, http.StatusOK, boflib.List())
 	case http.MethodPost:
 		var body struct {

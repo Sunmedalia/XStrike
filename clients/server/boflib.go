@@ -28,6 +28,11 @@ func NewBofLib(dir string) *BofLib {
 func (bl *BofLib) Scan() {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
+	bl.scanLocked()
+}
+
+// scanLocked is the directory re-read, assuming the write lock is held.
+func (bl *BofLib) scanLocked() {
 	bl.files = make(map[string]string)
 	if entries, err := os.ReadDir(bl.dir); err == nil {
 		for _, e := range entries {
@@ -41,6 +46,15 @@ func (bl *BofLib) Scan() {
 			}
 		}
 	}
+}
+
+// Refresh re-reads the directory so newly staged .x64.o files appear without a
+// core restart. Called from the list/run API handlers — a one-shot readdir is
+// cheap. If the dir is unchanged this is a no-op rebuild of the same map.
+func (bl *BofLib) Refresh() {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+	bl.scanLocked()
 }
 
 type BofEntry struct {
@@ -74,6 +88,14 @@ func (bl *BofLib) Resolve(v string) (string, error) {
 	bl.mu.RLock()
 	path, ok := bl.files[v]
 	bl.mu.RUnlock()
+	if !ok {
+		// Not in the in-memory map — re-scan the dir in case a new .x64.o
+		// was staged after startup (no core restart needed).
+		bl.Refresh()
+		bl.mu.RLock()
+		path, ok = bl.files[v]
+		bl.mu.RUnlock()
+	}
 	if ok {
 		raw, err := os.ReadFile(path)
 		if err != nil {
