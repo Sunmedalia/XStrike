@@ -3,27 +3,40 @@
 // Two listeners:
 //   - TCP (default :4444): the implant transport — newline-delimited JSON,
 //     same wire contract as crates/protocol. Each implant becomes a Session.
-//   - HTTP (default :8080): REST + WebSocket for the GUI/operator.
+//   - HTTP (default :8080): authenticated REST + WebSocket for the GUI/operator.
+//
+// Config:
+//
+//	Copy ruststrike.config.example.json to ruststrike.config.json, or pass
+//	-config <path>. Environment variables still override matching config fields.
 //
 // Usage:
-//   go-server [tcp-port] [http-port]
-//   go-server 4444 8080
+//
+//	go-server [-config ruststrike.config.json] [tcp-port] [http-port]
 //
 // REST:
-//   GET  /api/implants                      list sessions
-//   POST /api/implants/{id}/hello           link check
-//   POST /api/implants/{id}/bof             body {bof, args} (bof = lib name or b64)
-//   DELETE /api/implants/{id}               drop session
-//   GET  /api/bofs                          list BOF library
-//   POST /api/bofs                          upload {name, file_b64}
-//   POST /api/bofs/{name}/run?implant=<id>  body {args} (b64)
+//
+//	GET  /api/implants                      list sessions
+//	POST /api/implants/{id}/hello           link check
+//	POST /api/implants/{id}/bof             body {bof, args} (bof = lib name or b64)
+//	DELETE /api/implants/{id}               drop session
+//	GET  /api/bofs                          list BOF library
+//	POST /api/bofs                          upload {name, file_b64}
+//	POST /api/bofs/{name}/run?implant=<id>  body {args} (b64)
+//
 // WS:
-//   /ws  -> live event stream (implant_connected/disconnected/hello/output/error)
+//
+//	/ws  -> live event stream (implant_connected/disconnected/hello/output/error)
+//
+// Operator HTTP/WS auth:
+//
+//	auth.token must be configured. Clients send Authorization: Bearer <token>.
 package main
 
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,29 +46,35 @@ import (
 
 // globals wired in main(); read by handlers/goroutines.
 var (
-	manager     *SessionManager
-	bus         *EventBus
-	boflib      *BofLib
-	tasks       *TaskStore
-	store       *Store
-	listenerMgr *ListenerManager
-	sysinfoColl *SysinfoCollector
-	logMu       sync.Mutex
-	logOut      io.Writer = os.Stderr
+	manager        *SessionManager
+	bus            *EventBus
+	boflib         *BofLib
+	tasks          *TaskStore
+	store          *Store
+	listenerMgr    *ListenerManager
+	sysinfoColl    *SysinfoCollector
+	baseImplantExe string
+	logMu          sync.Mutex
+	logOut         io.Writer = os.Stderr
 )
 
 // logf returns a writer safe for concurrent logging lines.
 func logf() io.Writer { return logOut }
 
 func main() {
-	tcpPort := "4444"
-	httpPort := "8080"
-	if len(os.Args) > 1 {
-		tcpPort = os.Args[1]
+	cfg, err := loadAppConfig(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[core] config: %v\n", err)
+		os.Exit(1)
 	}
-	if len(os.Args) > 2 {
-		httpPort = os.Args[2]
+	if cfg.ConfigPath != "" {
+		fmt.Fprintf(os.Stderr, "[core] config: %s\n", cfg.ConfigPath)
 	}
+	if err := configureOperatorAuth(cfg.Auth); err != nil {
+		fmt.Fprintf(os.Stderr, "[core] auth: %v\n", err)
+		os.Exit(1)
+	}
+	baseImplantExe = cfg.Paths.ImplantExe
 
 	bus = NewEventBus()
 	manager = NewSessionManager(bus)
@@ -65,8 +84,7 @@ func main() {
 
 	// SQLite store (logs + listener config + agents + artifacts). Pure-Go
 	// modernc.org/sqlite — no cgo. Path via RUSTSTRIKE_DB env, else next to exe.
-	dbPath := os.Getenv("RUSTSTRIKE_DB")
-	st, err := NewStore(dbPath)
+	st, err := NewStore(cfg.Paths.DBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[core] store: %v\n", err)
 		os.Exit(1)
@@ -82,7 +100,7 @@ func main() {
 
 	// BOF library dir: RUSTSTRIKE_BOFS env var, else ./bofs next to the exe
 	// (so it works regardless of the current working directory).
-	bofDir := os.Getenv("RUSTSTRIKE_BOFS")
+	bofDir := cfg.Paths.BOFDir
 	if bofDir == "" {
 		if exe, err := os.Executable(); err == nil {
 			bofDir = filepath.Join(filepath.Dir(exe), "bofs")
@@ -101,9 +119,9 @@ func main() {
 		listenerMgr.Restore(rows)
 	}
 	// If no default listener exists yet, create the boot one.
-	if !hasListenerOnPort(tcpPort) {
-		if _, err := listenerMgr.Create("default", "0.0.0.0", tcpPort); err != nil {
-			fmt.Fprintf(os.Stderr, "[core] tcp bind :%s: %v\n", tcpPort, err)
+	if !hasListenerOnPort(cfg.Server.ImplantTCPPort) {
+		if _, err := listenerMgr.Create(cfg.Server.DefaultListenerName, cfg.Server.ImplantBindIP, cfg.Server.ImplantTCPPort); err != nil {
+			fmt.Fprintf(os.Stderr, "[core] tcp bind %s: %v\n", net.JoinHostPort(cfg.Server.ImplantBindIP, cfg.Server.ImplantTCPPort), err)
 			os.Exit(1)
 		}
 	}
@@ -112,8 +130,10 @@ func main() {
 	// HTTP/WS for operators.
 	mux := http.NewServeMux()
 	mountAPI(mux)
-	fmt.Fprintf(os.Stderr, "[core] operator HTTP on 0.0.0.0:%s (try GET /api/implants, ws /ws)\n", httpPort)
-	if err := http.ListenAndServe("0.0.0.0:"+httpPort, mux); err != nil {
+	handler := requireOperatorAuth(mux)
+	httpAddr := net.JoinHostPort(cfg.Server.OperatorBindIP, cfg.Server.OperatorHTTPPort)
+	fmt.Fprintf(os.Stderr, "[core] operator HTTP on %s (auth required, try POST /api/auth/login, GET /api/implants, ws /ws)\n", httpAddr)
+	if err := http.ListenAndServe(httpAddr, handler); err != nil {
 		fmt.Fprintf(os.Stderr, "[core] http: %v\n", err)
 		os.Exit(1)
 	}

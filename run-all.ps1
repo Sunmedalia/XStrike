@@ -10,8 +10,11 @@
 #   .\run-all.ps1 -NoGui         # core + implant only (headless, drive via REST)
 #   .\run-all.ps1 -NoImplant     # core + GUI only (connect an implant manually)
 #
-# Override ports / core URL via the usual env vars (RUSTSTRIKE_BOFS,
-# RUSTSTRIKE_CORE) -- they're forwarded to the child processes.
+# Override ports / core URL / operator auth via the usual env vars
+# (RUSTSTRIKE_CONFIG, RUSTSTRIKE_BOFS, RUSTSTRIKE_CORE,
+# RUSTSTRIKE_AUTH_USERNAME, RUSTSTRIKE_AUTH_PASSWORD, RUSTSTRIKE_AUTH_TOKEN)
+# -- they're forwarded to the child processes. If no config/env auth is set,
+# this launcher generates one-time credentials for the current run.
 #
 # Prereqs (built if missing):
 #   - target\release\ruststrike-implant.exe   (cargo build --release)
@@ -36,6 +39,37 @@ $implantExe = Join-Path $root 'target\release\ruststrike-implant.exe'
 $coreExe    = Join-Path $root 'clients\server\server.exe'
 $guiExe     = Join-Path $root 'clients\client\build\bin\xstrike.exe'
 $bofsDir    = Join-Path $root 'clients\server\bofs'
+$configPath = if ($env:RUSTSTRIKE_CONFIG) { $env:RUSTSTRIKE_CONFIG } else { Join-Path $root 'ruststrike.config.json' }
+$configDir = Split-Path -Parent $configPath
+if (-not $configDir) { $configDir = $root }
+$config = $null
+$configAuthToken = ''
+$configAuthUsername = ''
+$configAuthPassword = ''
+
+function Resolve-ConfigPath($p) {
+  if (-not $p) { return '' }
+  if ([IO.Path]::IsPathRooted([string]$p)) { return [string]$p }
+  return Join-Path $configDir ([string]$p)
+}
+
+if (Test-Path $configPath) {
+  $env:RUSTSTRIKE_CONFIG = $configPath
+  $config = Get-Content -Raw $configPath | ConvertFrom-Json
+  Write-Host "[config] using $configPath" -ForegroundColor DarkGray
+  if (-not $PSBoundParameters.ContainsKey('TcpPort') -and $config.server.implant_tcp_port) {
+    $TcpPort = [string]$config.server.implant_tcp_port
+  }
+  if (-not $PSBoundParameters.ContainsKey('HttpPort') -and $config.server.operator_http_port) {
+    $HttpPort = [string]$config.server.operator_http_port
+  }
+  if (-not $env:RUSTSTRIKE_BOFS -and $config.paths.bof_dir) {
+    $bofsDir = Resolve-ConfigPath $config.paths.bof_dir
+  }
+  if ($config.auth.token) { $configAuthToken = [string]$config.auth.token }
+  if ($config.auth.username) { $configAuthUsername = [string]$config.auth.username }
+  if ($config.auth.password) { $configAuthPassword = [string]$config.auth.password }
+}
 
 function Ensure-Built($label, $exe, $buildCmd, $buildCwd) {
   if (Test-Path $exe) { Write-Host "[ok] $label found" -ForegroundColor DarkGray; return }
@@ -85,10 +119,37 @@ Ensure-Built 'Wails GUI'    $guiExe     { wails build } (Join-Path $root 'client
 Ensure-Bofs
 
 # --- launch -------------------------------------------------------------------
-$env:RUSTSTRIKE_BOFS = $bofsDir
+$env:RUSTSTRIKE_BOFS = if ($env:RUSTSTRIKE_BOFS) { $env:RUSTSTRIKE_BOFS } else { $bofsDir }
 # SQLite DB next to the core exe; stub builder finds the implant exe.
-$env:RUSTSTRIKE_DB = if ($env:RUSTSTRIKE_DB) { $env:RUSTSTRIKE_DB } else { Join-Path $root 'ruststrike.db' }
-$env:RUSTSTRIKE_IMPLANT_EXE = $implantExe
+$env:RUSTSTRIKE_DB = if ($env:RUSTSTRIKE_DB) { $env:RUSTSTRIKE_DB } elseif ($config -and $config.paths.db_path) { Resolve-ConfigPath $config.paths.db_path } else { Join-Path $root 'ruststrike.db' }
+$env:RUSTSTRIKE_IMPLANT_EXE = if ($env:RUSTSTRIKE_IMPLANT_EXE) { $env:RUSTSTRIKE_IMPLANT_EXE } elseif ($config -and $config.paths.implant_exe) { Resolve-ConfigPath $config.paths.implant_exe } else { $implantExe }
+$generatedAuth = $false
+if (-not $env:RUSTSTRIKE_AUTH_TOKEN -and -not $configAuthToken) {
+  $tokenBytes = New-Object byte[] 32
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($tokenBytes) } finally { $rng.Dispose() }
+  $env:RUSTSTRIKE_AUTH_TOKEN = [Convert]::ToBase64String($tokenBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+  $generatedAuth = $true
+}
+if (-not $env:RUSTSTRIKE_AUTH_USERNAME -and -not $configAuthUsername) {
+  $env:RUSTSTRIKE_AUTH_USERNAME = 'admin'
+  $generatedAuth = $true
+}
+if (-not $env:RUSTSTRIKE_AUTH_PASSWORD -and -not $configAuthPassword) {
+  $passBytes = New-Object byte[] 18
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($passBytes) } finally { $rng.Dispose() }
+  $env:RUSTSTRIKE_AUTH_PASSWORD = [Convert]::ToBase64String($passBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+  $generatedAuth = $true
+}
+$effectiveUser = if ($env:RUSTSTRIKE_AUTH_USERNAME) { $env:RUSTSTRIKE_AUTH_USERNAME } else { $configAuthUsername }
+$effectivePass = if ($env:RUSTSTRIKE_AUTH_PASSWORD) { $env:RUSTSTRIKE_AUTH_PASSWORD } else { $configAuthPassword }
+$effectiveToken = if ($env:RUSTSTRIKE_AUTH_TOKEN) { $env:RUSTSTRIKE_AUTH_TOKEN } else { $configAuthToken }
+if ($generatedAuth) {
+  Write-Host "[auth] generated missing auth values for this launcher run" -ForegroundColor DarkGray
+} else {
+  Write-Host "[auth] using configured auth values" -ForegroundColor DarkGray
+}
 
 $jobs = New-Object System.Collections.Generic.List[object]
 $implantShell = $null
@@ -125,6 +186,8 @@ if (-not $NoGui) {
 Write-Host ""
 Write-Host "RustStrike is up." -ForegroundColor Green
 Write-Host "  core    : http://127.0.0.1:$HttpPort  (TCP :$TcpPort for implants)"
+Write-Host "  login   : $effectiveUser / $effectivePass"
+Write-Host "  auth    : Authorization: Bearer $effectiveToken"
 Write-Host "  REST    : GET  /api/implants   |  POST /api/bofs/ps/run?implant=1  -d `"{\`"args\`":\`"\`"}`""
 Write-Host "  stop    : close this window (or Ctrl+C) ... all child processes exit."
 Write-Host ""

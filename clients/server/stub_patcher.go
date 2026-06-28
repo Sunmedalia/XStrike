@@ -88,6 +88,11 @@ func lastIndex(haystack, needle []byte) int {
 // resolveBaseImplantExe finds the prebuilt implant exe: RUSTSTRIKE_IMPLANT_EXE
 // env var, else <exe-dir>/ruststrike-implant.exe, else a repo-relative path.
 func resolveBaseImplantExe() (string, error) {
+	if baseImplantExe != "" {
+		if _, err := os.Stat(baseImplantExe); err == nil {
+			return baseImplantExe, nil
+		}
+	}
 	if p := os.Getenv("RUSTSTRIKE_IMPLANT_EXE"); p != "" {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil

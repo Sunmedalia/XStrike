@@ -20,8 +20,9 @@ import (
 // API; the core's WebSocket event stream is forwarded to the frontend as Wails
 // events ("core:event").
 type App struct {
-	ctx     context.Context
-	coreURL string // e.g. http://127.0.0.1:8091
+	ctx       context.Context
+	coreURL   string // e.g. http://127.0.0.1:8091
+	coreToken string
 }
 
 func NewApp() *App { return &App{} }
@@ -30,6 +31,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	// Core address is configurable via env (RUSTSTRIKE_CORE).
 	a.coreURL = strings.TrimRight(coreBaseURL(), "/")
+	a.coreToken = coreAuthToken()
 	// Kick off the WebSocket listener that forwards core events to the UI.
 	go a.forwardEvents()
 }
@@ -75,6 +77,30 @@ type CoreEvent struct {
 }
 
 // ---- REST wrappers (frontend calls these via the generated bindings) ----
+
+// Login authenticates against the core and stores the returned bearer token for
+// subsequent REST calls and WebSocket reconnects.
+func (a *App) Login(username, password string) (string, error) {
+	body := map[string]string{"username": username, "password": password}
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Token string `json:"token"`
+		} `json:"data"`
+		Error string `json:"error"`
+	}
+	if err := a.postPublic("/api/auth/login", body, &resp); err != nil {
+		return "", err
+	}
+	if !resp.Success || resp.Data.Token == "" {
+		if resp.Error != "" {
+			return "", fmt.Errorf("%s", resp.Error)
+		}
+		return "", fmt.Errorf("login failed")
+	}
+	a.coreToken = resp.Data.Token
+	return resp.Data.Token, nil
+}
 
 // ListImplants returns all currently-connected implant sessions.
 func (a *App) ListImplants() ([]Implant, error) {
@@ -345,7 +371,12 @@ func (a *App) GetArtifact(implantID, aid uint64) (string, string, string, error)
 // ---- HTTP helpers ----
 
 func (a *App) get(path string, out interface{}) error {
-	resp, err := a.client().Get(a.coreURL + path)
+	req, err := http.NewRequest(http.MethodGet, a.coreURL+path, nil)
+	if err != nil {
+		return err
+	}
+	a.authorize(req)
+	resp, err := a.client().Do(req)
 	if err != nil {
 		return fmt.Errorf("core unreachable: %w", err)
 	}
@@ -354,13 +385,27 @@ func (a *App) get(path string, out interface{}) error {
 }
 
 func (a *App) post(path string, body interface{}, out interface{}) error {
+	return a.postJSON(path, body, out, true)
+}
+
+func (a *App) postPublic(path string, body interface{}, out interface{}) error {
+	return a.postJSON(path, body, out, false)
+}
+
+func (a *App) postJSON(path string, body interface{}, out interface{}, auth bool) error {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest("POST", a.coreURL+path, rd)
+	req, err := http.NewRequest(http.MethodPost, a.coreURL+path, rd)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
+	if auth {
+		a.authorize(req)
+	}
 	resp, err := a.client().Do(req)
 	if err != nil {
 		return fmt.Errorf("core unreachable: %w", err)
@@ -375,8 +420,12 @@ func (a *App) put(path string, body interface{}, out interface{}) error {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest("PUT", a.coreURL+path, rd)
+	req, err := http.NewRequest(http.MethodPut, a.coreURL+path, rd)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
+	a.authorize(req)
 	resp, err := a.client().Do(req)
 	if err != nil {
 		return fmt.Errorf("core unreachable: %w", err)
@@ -386,7 +435,11 @@ func (a *App) put(path string, body interface{}, out interface{}) error {
 }
 
 func (a *App) del(path string, out interface{}) error {
-	req, _ := http.NewRequest("DELETE", a.coreURL+path, nil)
+	req, err := http.NewRequest(http.MethodDelete, a.coreURL+path, nil)
+	if err != nil {
+		return err
+	}
+	a.authorize(req)
 	resp, err := a.client().Do(req)
 	if err != nil {
 		return fmt.Errorf("core unreachable: %w", err)
@@ -397,6 +450,12 @@ func (a *App) del(path string, out interface{}) error {
 
 func (a *App) client() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second}
+}
+
+func (a *App) authorize(req *http.Request) {
+	if a.coreToken != "" {
+		req.Header.Set("Authorization", "Bearer "+a.coreToken)
+	}
 }
 
 func decode(resp *http.Response, out interface{}) error {

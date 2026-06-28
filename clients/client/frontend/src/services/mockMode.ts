@@ -50,5 +50,5 @@ export function setMockMode(on: boolean) {
   }
 }
 
-/** A throwaway token so the router auth guard lets mock/real sessions through. */
+/** A throwaway token so the router auth guard lets mock sessions through. */
 export const MOCK_TOKEN = 'ruststrike-desktop-token'

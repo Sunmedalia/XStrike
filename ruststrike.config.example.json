@@ -1,0 +1,19 @@
+{
+  "auth": {
+    "username": "admin",
+    "password": "change-me-password",
+    "token": "change-me-long-random-token"
+  },
+  "server": {
+    "implant_bind_ip": "0.0.0.0",
+    "implant_tcp_port": "4444",
+    "operator_bind_ip": "0.0.0.0",
+    "operator_http_port": "8091",
+    "default_listener_name": "default"
+  },
+  "paths": {
+    "bof_dir": "./clients/server/bofs",
+    "db_path": "./ruststrike.db",
+    "implant_exe": "./target/release/ruststrike-implant.exe"
+  }
+}

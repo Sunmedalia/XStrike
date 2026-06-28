@@ -52,6 +52,10 @@ export function wailsReady(): boolean {
   return !!app()
 }
 
+export async function Login(username: string, password: string): Promise<string> {
+  return app().Login(username, password)
+}
+
 export async function ListImplants(): Promise<WailsImplant[]> {
   return app().ListImplants()
 }

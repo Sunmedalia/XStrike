@@ -23,7 +23,7 @@
  *   GET  /tasks/{id}       → GetTaskResult() → {status, output} (null while running)
  *   POST /bof/upload       → UploadBof()
  *   POST /nodes/{id}/stop|delete, /nodes/batch/* → DropImplant()
- *   POST /auth/login       → demo token (no auth in RustStrike)
+ *   POST /auth/login       → real core password login
  *   POST /logs (audit)     → swallowed (client-side only)
  */
 
@@ -199,8 +199,12 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
   const method = (config.method || 'get').toLowerCase()
   const path = toApiPath(config.url)
 
-  // ── auth (no real auth; just pass the guard) ────────────────────────────
-  if (method === 'post' && path === '/auth/login') return ok(config, { success: true, data: { token: MOCK_TOKEN } })
+  // ── auth ────────────────────────────────────────────────────────────────
+  if (method === 'post' && path === '/auth/login') {
+    const body = parseBody(config)
+    const token = await Wails.Login(String(body?.username || ''), String(body?.password || ''))
+    return ok(config, { success: true, data: { token } })
+  }
   if (method === 'post' && path === '/auth/ticket') return ok(config, { success: true, data: 'real-no-ticket' })
   if (method === 'post' && path === '/auth/logout') return ok(config, { success: true, data: {} })
 

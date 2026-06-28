@@ -2,7 +2,7 @@ import axios from 'axios'
 import { useToastStore } from '../stores/toast'
 import { useConnectionStore } from '../stores/connection'
 import { getApiBaseUrl } from '../runtime/env'
-import { isMockMode, isRealMode, MOCK_TOKEN } from './mockMode'
+import { isMockMode, MOCK_TOKEN } from './mockMode'
 import { installBackendAdapter } from './mockAdapter'
 import type { Router } from 'vue-router'
 
@@ -99,9 +99,9 @@ export default api
 // between real and demo at runtime via the `ghost-demo` localStorage flag.
 installBackendAdapter(api)
 
-// Ensure a token so the router auth guard lets us through in both modes
-// (RustStrike has no real auth; the desktop console boots straight in).
-if ((isMockMode() || isRealMode()) && !localStorage.getItem('token')) {
+// Ensure a token only for demo mode. Real desktop mode now authenticates
+// against the configured core account from the Login page.
+if (isMockMode() && !localStorage.getItem('token')) {
   localStorage.setItem('token', MOCK_TOKEN)
 }
 

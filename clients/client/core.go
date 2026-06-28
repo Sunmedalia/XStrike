@@ -11,10 +11,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+const authTokenEnv = "RUSTSTRIKE_AUTH_TOKEN"
 
 // coreBaseURL returns the Go service core HTTP base, configurable via
 // RUSTSTRIKE_CORE (default http://127.0.0.1:8091).
@@ -23,6 +26,14 @@ func coreBaseURL() string {
 		return v
 	}
 	return "http://127.0.0.1:8091"
+}
+
+func coreAuthToken() string {
+	token := strings.TrimSpace(os.Getenv(authTokenEnv))
+	if strings.ContainsAny(token, "\r\n") {
+		return ""
+	}
+	return token
 }
 
 // forwardEvents connects to the core's /ws and re-emits every event to the
@@ -51,10 +62,15 @@ func (a *App) dialAndForward(wsURL wsAddr) error {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	key := randWSKey()
+	authHeader := ""
+	if a.coreToken != "" {
+		authHeader = "Authorization: Bearer " + a.coreToken + "\r\n"
+	}
 	req := "GET " + wsURL.path + " HTTP/1.1\r\n" +
 		"Host: " + wsURL.host + "\r\n" +
 		"Upgrade: websocket\r\nConnection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: " + key + "\r\n" +
+		authHeader +
 		"Sec-WebSocket-Version: 13\r\n\r\n"
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return err

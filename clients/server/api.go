@@ -9,6 +9,8 @@ import (
 
 // mountAPI registers all REST handlers on the given mux.
 func mountAPI(mux *http.ServeMux) {
+	mux.HandleFunc("/api/auth/login", authLoginHandler)
+	mux.HandleFunc("/auth/login", authLoginHandler)
 	mux.HandleFunc("/api/implants", implantsHandler)
 	mux.HandleFunc("/api/implants/", implantHandler)
 	mux.HandleFunc("/api/bofs", bofsHandler)
@@ -36,9 +38,10 @@ func implantsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // /api/implants/{id}  with sub-actions:
-//   POST /api/implants/{id}/hello
-//   POST /api/implants/{id}/bof       body: {"bof":"<name|b64>","args":"<b64>"}
-//   DELETE /api/implants/{id}
+//
+//	POST /api/implants/{id}/hello
+//	POST /api/implants/{id}/bof       body: {"bof":"<name|b64>","args":"<b64>"}
+//	DELETE /api/implants/{id}
 func implantHandler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/implants/")
 	parts := strings.SplitN(rest, "/", 2)
