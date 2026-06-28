@@ -163,6 +163,7 @@ function bofCommandMetas(bofs: { name: string }[]): any[] {
     ps: { encode_type: 'none', description: 'List processes (ps.c format)' },
     proc_list: { encode_type: 'none', aliases: 'procs', description: 'List processes (component format)' },
     proc_kill: { encode_type: 'beacon_string', aliases: 'kill', description: 'Kill a process by PID', destructive: true },
+    netstat: { encode_type: 'none', aliases: 'net,netlist', description: 'List TCP/UDP network connections (component format)' },
     ls: { encode_type: 'raw_string', aliases: 'dir', description: 'List directory (ls.c format)' },
     file_list: { encode_type: 'beacon_string', aliases: 'ls2,flist', description: 'List directory (component format)' },
     download: { encode_type: 'raw_string', description: 'Download a file (raw-text path, base64 output)' },

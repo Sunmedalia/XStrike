@@ -685,6 +685,32 @@ mod component_bof_tests {
         }
     }
 
+    /// Runs the netstat BOF (no args). Proves the loader resolves the
+    /// IPHLPAPI$* imports (GetExtendedTcpTable/GetExtendedUdpTable) and that the
+    /// TAB-separated PROTO\tLOCAL\tREMOTE\tPID\tSTATE schema parses. A Windows
+    /// host always has at least one listening TCP endpoint (e.g. RPC on :135),
+    /// so we assert ≥1 TCP row. Requires examples/netstat.x64.o built.
+    #[test]
+    fn run_netstat() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let bof = match std::fs::read(dir.join("../../examples/netstat.x64.o")) {
+            Ok(b) => b,
+            Err(_) => { eprintln!("skipping: examples/netstat.x64.o not built"); return; }
+        };
+        let out = run_bof(&bof, b"").expect("netstat should succeed");
+        eprintln!("NETSTAT OUTPUT ({} bytes):\n{}", out.len(), &out[..out.len().min(600)]);
+        assert!(!out.contains("netstat:"), "BOF reported error: {out}");
+        // Each row is PROTO\tLOCAL\tREMOTE\tPID\tSTATE — 5 TAB-separated fields.
+        let rows: Vec<&str> = out.lines()
+            .filter(|l| !l.is_empty() && (l.starts_with("TCP\t") || l.starts_with("UDP\t")))
+            .collect();
+        assert!(rows.iter().all(|l| l.split('\t').count() >= 5),
+                "expected 5 TAB fields per row, got: {out:?}");
+        // A Windows host always has TCP endpoints (RPC/svchost listen on :135).
+        let tcp_rows = rows.iter().filter(|l| l.starts_with("TCP\t")).count();
+        assert!(tcp_rows >= 1, "expected >=1 TCP row, got: {out:?}");
+    }
+
     /// Runs bof_whoami from the project-root bofs/ tree (no args, shells out to
     /// whoami.exe via CreateProcessA). Proves the bofs/ tree BOFs — which use
     /// the CS4.x beacon.h + raw BeaconOutput — load and run under the loader.

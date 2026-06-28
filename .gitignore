@@ -35,3 +35,4 @@ goal.md
 *.db
 *.db-shm
 *.db-wal
+ruststrike.config.json

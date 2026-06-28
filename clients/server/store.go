@@ -51,6 +51,7 @@ const (
 	KindProcList   ArtifactKind = "proc_list"
 	KindScreenshot ArtifactKind = "screenshot"
 	KindDownload   ArtifactKind = "download"
+	KindNetList    ArtifactKind = "net_list"
 )
 
 // Artifact is a captured BOF output row. Meta holds parseable text (file/proc

