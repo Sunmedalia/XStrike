@@ -105,6 +105,78 @@ curl -X POST "http://127.0.0.1:8091/api/bofs/ps/run?implant=1" \
    - `ruststrike-beacon(-silent)` — intermittent link, must survive server downtime (retries forever).
    - `zig-implant(-silent)` — alternate toolchain, same behavior.
 
+### ⚙️ Configuration (server core)
+
+The Go core loads its config in this precedence (first wins):
+
+1. **CLI flag** — `server -config path/to/config.json` (also `-config=...` / `--config=...`).
+2. **Env var** — `RUSTSTRIKE_CONFIG=path/to/config.json`.
+3. **Default file** — `ruststrike.config.json` in the CWD, then next to the core exe.
+
+Then **env vars override file values** (same-name env wins), and **positional args override ports** (`server <tcp> <http>`). A minimal config (see [`ruststrike.config.example.json`](./ruststrike.config.example.json)):
+
+```json
+{
+  "auth": {
+    "username": "admin",
+    "password": "change-me-password",
+    "token": "change-me-long-random-token"
+  },
+  "server": {
+    "implant_bind_ip": "0.0.0.0",
+    "implant_tcp_port": "4444",
+    "operator_bind_ip": "0.0.0.0",
+    "operator_http_port": "8091",
+    "default_listener_name": "default"
+  },
+  "paths": {
+    "bof_dir": "./clients/server/bofs",
+    "db_path": "./ruststrike.db",
+    "implant_exe": "./target/release/ruststrike-implant.exe"
+  }
+}
+```
+
+| Field | Env override | Purpose |
+|---|---|---|
+| `auth.username` / `password` / `token` | `RUSTSTRIKE_AUTH_*` | Operator HTTP/WS auth. `run-all.ps1` auto-generates a random password + token if unset. |
+| `server.implant_bind_ip` / `implant_tcp_port` | `RUSTSTRIKE_TCP_BIND_IP` / `RUSTSTRIKE_TCP_PORT` | Implant transport listener (the boot listener is created from `default_listener_name` + these). |
+| `server.operator_bind_ip` / `operator_http_port` | `RUSTSTRIKE_HTTP_BIND_IP` / `RUSTSTRIKE_HTTP_PORT` | Operator HTTP/WS listener for the GUI. |
+| `paths.bof_dir` | `RUSTSTRIKE_BOFS` | BOF library directory. |
+| `paths.db_path` | `RUSTSTRIKE_DB` | SQLite DB location. |
+| `paths.implant_exe` | `RUSTSTRIKE_IMPLANT_EXE` | **Base stock-implant exe** for the stub builder. |
+
+> ⚠️ Unknown JSON fields are **rejected** (`DisallowUnknownFields`) — copy the example file and edit, don't hand-write.
+
+### 🧱 Where to place the base agent exes (stub builder)
+
+When you click **Generate Agent** (GUI) or call `/api/stub/build`, the core patches a **prebuilt base agent exe** by appending a `host\0port\0` (beacon: `+interval\0`) trailer. It must find that base exe — and **beacon has no `paths` config field**, so this is the #1 cause of a `503 base beacon exe not found` error.
+
+`resolveBaseImplantExe` looks for the base in this order:
+
+| # | Stock implant | Beacon |
+|---|---|---|
+| 1 | `paths.implant_exe` (config) | — (no field) |
+| 2 | `RUSTSTRIKE_IMPLANT_EXE` | `RUSTSTRIKE_BEACON_EXE` |
+| 3 | `<core-exe-dir>/ruststrike-implant.exe` | `<core-exe-dir>/ruststrike-beacon.exe` |
+| 4 | `../../target/release/ruststrike-implant.exe` | `../../target/release/ruststrike-beacon.exe` |
+
+`silent=true` auto-swaps to the `-silent.exe` sibling in the same dir. The four agent exes live in `target/release/` after `cargo build --release`:
+
+```
+target/release/ruststrike-implant.exe        target/release/ruststrike-implant-silent.exe
+target/release/ruststrike-beacon.exe         target/release/ruststrike-beacon-silent.exe
+```
+
+**Do you need to move them?** Depends on how you launch the core:
+
+- **`run-all.ps1`** — sets `RUSTSTRIKE_IMPLANT_EXE` for you; beacon falls back to `../../target/release/` (works, since the core runs from `clients/server`). **No move needed.**
+- **`cd clients/server && ./server.exe`** — step 4 hits `target/release/`. **No move needed.**
+- **Core exe copied/launched from elsewhere** — steps 3 & 4 miss. Fix with **one** of:
+  - **env var** (recommended, any path): `$env:RUSTSTRIKE_BEACON_EXE = "D:\...\ruststrike-beacon.exe"` (and `RUSTSTRIKE_IMPLANT_EXE` for stock).
+  - **copy** the 4 exes next to `server.exe` (step 3).
+  - **launch from `clients/server`** (step 4).
+
 ### 🔌 Wire contract
 
 Newline-delimited JSON over a single TCP stream. Discriminator is `type`, `snake_case`. `crates/protocol/src/lib.rs` is the source of truth.
@@ -264,6 +336,78 @@ curl -X POST "http://127.0.0.1:8091/api/bofs/ps/run?implant=1" \
    - `ruststrike-implant-silent` —— 投放用 agent，无控制台窗口。
    - `ruststrike-beacon(-silent)` —— 链路不稳定、需扛过服务器宕机（永久重试）。
    - `zig-implant(-silent)` —— 换工具链，行为相同。
+
+### ⚙️ 配置（服务端核心）
+
+Go 核心按以下优先级加载配置（先命中者生效）：
+
+1. **命令行参数** —— `server -config path/to/config.json`（也支持 `-config=...` / `--config=...`）。
+2. **环境变量** —— `RUSTSTRIKE_CONFIG=path/to/config.json`。
+3. **默认文件** —— 当前工作目录的 `ruststrike.config.json`，其次核心 exe 同目录。
+
+之后**环境变量覆盖文件值**（同名 env 优先），**位置参数再覆盖端口**（`server <tcp> <http>`）。最小配置（见 [`ruststrike.config.example.json`](./ruststrike.config.example.json)）：
+
+```json
+{
+  "auth": {
+    "username": "admin",
+    "password": "change-me-password",
+    "token": "change-me-long-random-token"
+  },
+  "server": {
+    "implant_bind_ip": "0.0.0.0",
+    "implant_tcp_port": "4444",
+    "operator_bind_ip": "0.0.0.0",
+    "operator_http_port": "8091",
+    "default_listener_name": "default"
+  },
+  "paths": {
+    "bof_dir": "./clients/server/bofs",
+    "db_path": "./ruststrike.db",
+    "implant_exe": "./target/release/ruststrike-implant.exe"
+  }
+}
+```
+
+| 字段 | 环境变量覆盖 | 用途 |
+|---|---|---|
+| `auth.username` / `password` / `token` | `RUSTSTRIKE_AUTH_*` | 操作端 HTTP/WS 认证。`run-all.ps1` 在未设置时会自动生成随机密码 + token。 |
+| `server.implant_bind_ip` / `implant_tcp_port` | `RUSTSTRIKE_TCP_BIND_IP` / `RUSTSTRIKE_TCP_PORT` | 植入体传输监听器（启动监听器由 `default_listener_name` + 这两项创建）。 |
+| `server.operator_bind_ip` / `operator_http_port` | `RUSTSTRIKE_HTTP_BIND_IP` / `RUSTSTRIKE_HTTP_PORT` | 面向 GUI 的操作端 HTTP/WS 监听器。 |
+| `paths.bof_dir` | `RUSTSTRIKE_BOFS` | BOF 库目录。 |
+| `paths.db_path` | `RUSTSTRIKE_DB` | SQLite 数据库位置。 |
+| `paths.implant_exe` | `RUSTSTRIKE_IMPLANT_EXE` | **stock 植入体基底 exe**，供 stub 构建器使用。 |
+
+> ⚠️ JSON 未知字段会被**拒绝**（`DisallowUnknownFields`）—— 复制示例文件再改，不要手写。
+
+### 🧱 基底 agent exe 放哪里（stub 构建器）
+
+当你在 GUI 点 **Generate Agent** 或调用 `/api/stub/build` 时，核心会在一个**预构建的基底 agent exe** 末尾追加 `host\0port\0`（beacon：再加 `interval\0`）trailer。核心必须能找到这个基底 —— 而 **beacon 没有 `paths` 配置字段**，这正是 `503 base beacon exe not found` 报错的第一大原因。
+
+`resolveBaseImplantExe` 按此顺序查找基底：
+
+| # | stock 植入体 | beacon |
+|---|---|---|
+| 1 | `paths.implant_exe`（config） | ——（无字段） |
+| 2 | `RUSTSTRIKE_IMPLANT_EXE` | `RUSTSTRIKE_BEACON_EXE` |
+| 3 | `<核心 exe 目录>/ruststrike-implant.exe` | `<核心 exe 目录>/ruststrike-beacon.exe` |
+| 4 | `../../target/release/ruststrike-implant.exe` | `../../target/release/ruststrike-beacon.exe` |
+
+`silent=true` 时自动换成同目录的 `-silent.exe` 兄弟。`cargo build --release` 后 4 个 agent exe 位于 `target/release/`：
+
+```
+target/release/ruststrike-implant.exe        target/release/ruststrike-implant-silent.exe
+target/release/ruststrike-beacon.exe         target/release/ruststrike-beacon-silent.exe
+```
+
+**需要移动它们吗？** 取决于你怎么启动核心：
+
+- **`run-all.ps1`** —— 已为你设好 `RUSTSTRIKE_IMPLANT_EXE`；beacon 走第 4 步回退 `../../target/release/`（核心在 `clients/server` 运行，能命中）。**无需移动。**
+- **`cd clients/server && ./server.exe`** —— 第 4 步命中 `target/release/`。**无需移动。**
+- **核心 exe 被拷贝/从别处启动** —— 第 3、4 步都落空。三选一修复：
+  - **环境变量**（推荐，可指向任意路径）：`$env:RUSTSTRIKE_BEACON_EXE = "D:\...\ruststrike-beacon.exe"`（stock 再加 `RUSTSTRIKE_IMPLANT_EXE`）。
+  - **拷贝** 4 个 exe 到 `server.exe` 同目录（命中第 3 步）。
+  - **从 `clients/server` 启动**（命中第 4 步）。
 
 ### 🔌 线协议
 
