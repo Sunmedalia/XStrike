@@ -6,7 +6,7 @@
         <Folder :size="12" class="path-icon" />
         <input v-model="path" @keydown.enter="onPathEnter" />
       </div>
-      <button class="btn" @click="refreshFiles(false)" :disabled="loading">
+      <button class="btn" @click="refreshCurrentView(false)" :disabled="loading">
         <RefreshCw :size="12" :class="{ spinning: loading }" /> Refresh
       </button>
     </div>
@@ -23,11 +23,10 @@
             v-for="file in parentFiles"
             :key="file.name"
             class="file-item"
-            :class="{ active: isCurrentDir(file), 'is-dir': file.is_dir }"
+            :class="{ active: isCurrentDir(file), selected: isSelectedParentFile(file), 'is-dir': isDirEntry(file) }"
             @click="onParentFileClick(file)"
-            @dblclick="onParentFileDblClick(file)"
           >
-            <Folder v-if="file.is_dir" :size="14" class="item-icon dir-icon" />
+            <Folder v-if="isDirEntry(file)" :size="14" class="item-icon dir-icon" />
             <FileIcon v-else :size="14" class="item-icon file-icon-svg" />
             <span class="item-name">{{ file.name }}</span>
           </div>
@@ -59,17 +58,22 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="file in filteredFiles" :key="file.name" @dblclick="onFileDblClick(file)">
+              <tr
+                v-for="file in filteredFiles"
+                :key="file.name"
+                :class="{ selected: isSelectedFile(file) }"
+                @click="onFileClick(file)"
+              >
                 <td class="file-icon">
-                  <Folder v-if="file.is_dir" :size="14" class="dir-icon" />
+                  <Folder v-if="isDirEntry(file)" :size="14" class="dir-icon" />
                   <FileIcon v-else :size="14" class="file-icon-svg" />
                 </td>
-                <td class="file-name" :class="{ 'is-dir': file.is_dir }">{{ file.name }}</td>
-                <td class="file-size">{{ file.is_dir ? '-' : formatSize(file.size) }}</td>
+                <td class="file-name" :class="{ 'is-dir': isDirEntry(file) }">{{ file.name }}</td>
+                <td class="file-size">{{ isDirEntry(file) ? '-' : formatSize(file.size) }}</td>
                 <td class="file-date">{{ file.modified || '-' }}</td>
                 <td class="file-actions">
-                  <button v-if="!file.is_dir" class="action-btn" @click="downloadFile(file)" title="Download"><Download :size="12" /></button>
-                  <button class="action-btn delete" @click="confirmDeleteFile(file)" title="Delete"><Trash2 :size="12" /></button>
+                  <button v-if="!isDirEntry(file)" class="action-btn" @click.stop="downloadFile(file)" title="Download"><Download :size="12" /></button>
+                  <button class="action-btn delete" @click.stop="confirmDeleteFile(file)" title="Delete"><Trash2 :size="12" /></button>
                 </td>
               </tr>
               <tr v-if="hiddenCount > 0">
@@ -115,6 +119,8 @@ const files = ref<any[]>([])
 const loading = ref(false)
 const parentFiles = ref<any[]>([])
 const loadingParent = ref(false)
+const selectedFileName = ref('')
+const selectedParentFileName = ref('')
 // The directory whose contents are CURRENTLY rendered in `files`. Click/download
 // navigation resolves against THIS (not `path.value`, which can race ahead during
 // an in-flight load). Fixes the "click a sibling → it gets concatenated as a
@@ -127,6 +133,7 @@ const displayedPath = ref('C:\\')
 // fast one.
 const loadToken = ref(0)
 const parentLoadToken = ref(0)
+const suppressParentWatch = ref(false)
 // Last parent path we actually fetched. Clicking a sibling dir (same parent)
 // must NOT re-fire loadParentDir — that re-poll, if superseded, blanks the left
 // panel (the "无法联动" bug). We keep the existing left panel and just let the
@@ -187,12 +194,20 @@ const currentDirName = computed(() => {
   return parts[parts.length - 1] || parts[0] || 'Root'
 })
 
+const isDirEntry = (file: any) => {
+  const marker = String(file?.type || file?.kind || '').trim().toUpperCase()
+  return Boolean(file?.is_dir || marker === 'D' || marker === 'DIR' || marker === 'DIRECTORY' || marker === '<DIR>')
+}
+
 // Check if a file in parent dir is the current directory
 const isCurrentDir = (file: any) => {
-  if (!file.is_dir) return false
+  if (!isDirEntry(file)) return false
   const currentName = currentDirName.value
   return file.name === currentName
 }
+
+const isSelectedFile = (file: any) => file.name === selectedFileName.value
+const isSelectedParentFile = (file: any) => file.name === selectedParentFileName.value && !isCurrentDir(file)
 
 // Right-panel rows after the client-side name filter, capped to RENDER_CAP so a
 // huge directory (System32) doesn't freeze the DOM. `files` keeps the full set
@@ -219,6 +234,7 @@ const hiddenCount = computed(() => {
 // re-poll, if superseded, blanks the left panel (the "无法联动" bug). The
 // isCurrentDir highlight recomputes off currentDirName either way.
 watch(path, () => {
+  if (suppressParentWatch.value) return
   if (hasParent.value) {
     if (parentPath.value !== loadedParentPath.value) {
       loadParentDir()
@@ -405,8 +421,8 @@ const refreshFiles = async (canonicalize = false) => {
       // ahead if the user clicked again mid-load).
       displayedPath.value = path.value
       updateCache()
-      // Parent dir is loaded by watch(path) on real navigations; don't
-      // double-fire it here (that was the "loading broken" cascade).
+      // Parent dir is loaded by watch(path) for free path edits, and by
+      // navigateToPath/refreshCurrentView for controlled navigation.
     }
   } catch (err: any) {
     if (myToken === loadToken.value) toast.error(err.message || 'Failed to list files')
@@ -415,10 +431,30 @@ const refreshFiles = async (canonicalize = false) => {
   }
 }
 
+const refreshCurrentView = async (canonicalize = false) => {
+  parentLoadToken.value++
+  await refreshFiles(canonicalize)
+  await loadParentDir()
+}
+
+const navigateToPath = async (nextPath: string, canonicalize = false) => {
+  suppressParentWatch.value = true
+  parentLoadToken.value++
+  loadingParent.value = false
+  parentError.value = ''
+  path.value = normalizePath(nextPath)
+  files.value = []
+  try {
+    await refreshFiles(canonicalize)
+    await loadParentDir()
+  } finally {
+    suppressParentWatch.value = false
+  }
+}
+
 /** Enter-in-path: canonicalize (let the BOF normalize the typed string). */
 const onPathEnter = () => {
-  path.value = normalizePath(path.value)
-  refreshFiles(true)
+  navigateToPath(path.value, true)
 }
 
 const parseFileListOutput = (output: string, skipPathUpdate = false) => {
@@ -433,11 +469,13 @@ const parseFileListOutput = (output: string, skipPathUpdate = false) => {
     const parts = line.split('\t')
     if (parts.length < 4) continue
     const [type, name, sizeRaw, epochRaw] = parts
+    const marker = type.trim().toUpperCase()
     if (name === '.' || name === '..') continue
     const epoch = Number(epochRaw) || 0
     rows.push({
       name,
-      is_dir: type === 'D',
+      type: marker,
+      is_dir: marker === 'D' || marker === 'DIR' || marker === 'DIRECTORY' || marker === '<DIR>',
       size: Number(sizeRaw) || 0,
       modified: epoch ? new Date(epoch * 1000).toLocaleString() : ''
     })
@@ -447,35 +485,42 @@ const parseFileListOutput = (output: string, skipPathUpdate = false) => {
 
 const goUp = () => {
   if (!hasParent.value) return
-  path.value = normalizePath(parentPath.value)
-  refreshFiles(false)
+  selectedFileName.value = ''
+  selectedParentFileName.value = ''
+  navigateToPath(parentPath.value, false)
 }
 
-const onFileDblClick = (file: any) => {
-  if (file.is_dir) {
+const navigateFromBase = (basePath: string, file: any) => {
+  if (!isDirEntry(file)) return
+  const resolvedBase = basePath || displayedPath.value || path.value || 'C:\\'
+  const base = resolvedBase.endsWith('\\') ? resolvedBase : resolvedBase + '\\'
+  const nextPath = normalizePath(base + file.name)
+  if (nextPath === path.value && !loading.value) return
+  selectedFileName.value = ''
+  selectedParentFileName.value = ''
+  nameFilter.value = ''
+  navigateToPath(nextPath, false)
+}
+
+const onFileClick = (file: any) => {
+  selectedFileName.value = file.name
+  selectedParentFileName.value = ''
+  if (isDirEntry(file)) {
     // Base off the directory actually displayed (whose rows are visible), NOT
     // path.value — path.value may have already advanced from a prior click whose
     // load is still in flight, which would concatenate this row as a child of
     // the wrong (just-clicked) dir. Clearing files gives immediate feedback
     // that the click registered (no stale rows to misclick).
-    const base = displayedPath.value.endsWith('\\') ? displayedPath.value : displayedPath.value + '\\'
-    path.value = normalizePath(base + file.name)
-    files.value = []
-    refreshFiles(false)
+    navigateFromBase(displayedPath.value, file)
   }
 }
 
-const onParentFileClick = (_file: any) => {
-  // Single click in parent panel - just highlight
-}
-
-const onParentFileDblClick = (file: any) => {
-  if (file.is_dir) {
+const onParentFileClick = (file: any) => {
+  selectedParentFileName.value = file.name
+  selectedFileName.value = ''
+  if (isDirEntry(file)) {
     // The parent panel shows loadedParentPath's contents; base off that.
-    const base = loadedParentPath.value.endsWith('\\') ? loadedParentPath.value : loadedParentPath.value + '\\'
-    path.value = normalizePath(base + file.name)
-    files.value = []
-    refreshFiles(false)
+    navigateFromBase(loadedParentPath.value || parentPath.value, file)
   }
 }
 
@@ -537,7 +582,7 @@ const deleteFile = async (file: any) => {
       toast.error('No cmd_exec BOF found. Upload cmd_exec.o first.')
       return
     }
-    const command = file.is_dir ? `rmdir /s /q "${fullPath}"` : `del /f /q "${fullPath}"`
+    const command = isDirEntry(file) ? `rmdir /s /q "${fullPath}"` : `del /f /q "${fullPath}"`
     await auditTaskInput({
       source: 'file:delete',
       nodeId: props.targetId,
@@ -609,7 +654,7 @@ onMounted(async () => {
     path.value = normalizePath(getInitialPathFromBeacon())
     displayedPath.value = path.value
     // Canonicalize on first load so the BOF's CWD can correct the initial path.
-    await refreshFiles(true)
+    await navigateToPath(path.value, true)
     // If the live refresh came up empty (implant offline), hydrate the last
     // listing from the persisted store so the operator sees prior context.
     if (!files.value.length) {
@@ -623,7 +668,7 @@ onUnmounted(() => {
 })
 
 const onSync = async () => {
-  await refreshFiles(false)
+  await refreshCurrentView(false)
 }
 </script>
 
@@ -656,6 +701,7 @@ const onSync = async () => {
 .file-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; font-size: 11px; color: var(--tx-2); transition: all 0.15s; border-radius: 4px; margin-bottom: 2px; }
 .file-item:hover { background: var(--bg-3); color: var(--tx); }
 .file-item.active { background: var(--bg-4); color: var(--tx); font-weight: 600; border: 1px solid var(--pri); }
+.file-item.selected:not(.active) { background: color-mix(in srgb, var(--pri) 12%, var(--bg-3)); color: var(--tx); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pri) 34%, transparent); }
 .file-item.is-dir { color: var(--blue); }
 .file-item.is-dir.active { color: var(--pri); }
 .item-icon { flex-shrink: 0; }
@@ -671,6 +717,8 @@ const onSync = async () => {
 .file-table th { text-align: left; padding: 8px 12px; background: var(--bg-3); position: sticky; top: 0; color: var(--tx-3); text-transform: uppercase; font-size: 10px; z-index: 1; border-bottom: 1px solid var(--bd); }
 .file-table td { padding: 6px 12px; border-bottom: 1px solid var(--bd); vertical-align: middle; }
 .file-table tbody tr:hover { background: var(--bg-4); cursor: pointer; }
+.file-table tbody tr.selected { background: color-mix(in srgb, var(--pri) 12%, transparent); }
+.file-table tbody tr.selected:hover { background: color-mix(in srgb, var(--pri) 18%, transparent); }
 .file-icon { color: var(--tx-3); }
 .file-table .dir-icon { color: var(--amber); }
 .file-icon-svg { color: var(--tx-3); }
