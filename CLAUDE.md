@@ -150,6 +150,34 @@ Run dev (hot reload): `cd clients/client && wails dev` (vite pinned to `127.0.0.
 
 Verified: `npm run build` (typecheck + vite) clean, `wails build` produces `xstrike.exe`, and the real backend chain (core task store + implant + ps/ls/cmd_exec/download/upload) is verified end-to-end via REST. Visual/interactive GUI verification requires running `wails dev` on a desktop session.
 
+### Zig implant (`zig-implant/`)
+
+A Zig port of the Rust implant (`crates/implant` + `loader` + `protocol`) — a second, language-alternate BOF agent that is wire- and behavior-compatible with the Rust one. Reverse-connects to the Go core, speaks the same newline-JSON protocol, runs BOFs **in-process** via its own COFF loader, returns captured output, and acts as a TCP pivot/relay. x64 Windows only; built with **Zig 0.16** (`scoop install zig`). See `zig-implant/README.md`.
+
+```sh
+cd zig-implant && zig build -Doptimize=ReleaseSmall   # -> zig-out/bin/zig-implant{,-silent}.exe (~140 KB)
+```
+
+Two targets share one root source (`src/main.zig`): `zig-implant` (console) and `zig-implant-silent` (GUI subsystem, no console window — the deployed form). `build.zig` sets `exe_silent.subsystem = .windows`.
+
+**Zig 0.16 caveat** — 0.16 removed `std.net` and `std.fs` file ops (moved into the experimental `std.Io` framework) and `std.process.argsAlloc`/`GeneralPurposeAllocator`. The implant is Windows-only, so it sidesteps `std.Io` entirely and talks Win32 directly: Winsock via `@extern` (`src/net.zig`), `CreateFileA`/`ReadFile` for trailer/exe reads (`src/winapi.zig`), `GetCommandLineA` + tokenizer for args (`src/agent.zig::parseCliArgs`), `std.heap.smp_allocator` (relay spawns threads), `std.atomic.Mutex` (spinlock — no blocking `Thread.Mutex` in 0.16), and AT&T-syntax inline asm for `__chkstk` (`src/loader/crt.zig`).
+
+Module map: `agent.zig`↔`crates/implant/src/lib.rs` (run loop, trailer + CLI resolution, dispatch), `protocol.zig`↔`crates/protocol` (snake_case `type`, base64, JSON escaper), `relay.zig`↔implant relay (bind/accept/splice), `loader/coff.zig`↔`obj.rs`, `loader/exec.zig`↔`exec.rs` (VirtualAlloc RWX, thunk+ptr external slots, AMD64 relocs with mingw +1 numbering), `loader/beacon.zig`↔`stubs.rs` (CS 4.x `datap`, `BeaconPrintf` r8/r9 capture), `loader/crt.zig`↔rt_* (memcpy/memset/strlen/`__chkstk`). All cross-file invariants (`datap` layout, toolchain reloc numbering, `__imp_` handling, `__chkstk` rax preservation, trailer magic) are shared with the Rust loader.
+
+`boftest.zig` is a standalone loader harness (not in `build.zig`): `zig build-exe boftest.zig -target x86_64-windows-msvc -ODebug && ./boftest.exe ../examples/hello.x64.o`.
+
+Verified end-to-end against the Go core: reverse-connect, `hello`, BOF exec (`hello`/`sysinfo` auto-collect/`cmd_exec whoami`/`proc_list`), operator-driven BOF via REST task-poll, and pivot/relay (a child implant connected through a relay port appears at the core as a normal new implant). Same trailer magic as `tools/stubbuilder` + Go `stub_patcher.go`.
+
+**Zig implant OPSEC / stealth (release build)** — the same layers as the Rust implant, ported to Zig (see `zig-implant/README.md`):
+
+- **PE metadata** — `zig-implant/resource.rc` (compiled by Zig's built-in RC compiler via `build.zig::addWin32ResourceFile`) embeds a VERSIONINFO + manifest: FileDescription/ProductName/CompanyName = "System Update Helper", FileVersion 10.0.22621.0, `asInvoker`, common-controls v6, Win7-11 supportedOS. `zig-implant/updatehelper.manifest` is a copy of `crates/implant/updatehelper.manifest`.
+- **Stripped** — `build.zig` sets `strip = true` on both modules: no debug info, no PDB, no source paths in the release exe.
+- **Benign string padding** — `zig-implant/src/stealth.zig` `export const benign_padding` (`@embedFile` of `benign_strings.txt`, a fake EULA copied from `crates/implant/src/`) dilutes suspicious strings and keeps entropy ~6.6 bits/byte. `main.zig::stealth.touch()` retains it under LTO.
+- **XOR-encoded Beacon API names** — `zig-implant/src/loader/exec.zig::buildExternalMap` registers the Beacon stubs under names decoded at *runtime* from `ENC_BEACON_*` arrays in `stealth.zig` (key 0x2A, shared with `crates/loader/src/exec.rs`), so `BeaconPrintf`/`BeaconOutput`/… never appear in `.rdata`. The Beacon stubs in `beacon.zig` are NOT `export`'d (an exported name would leak via the export table) — `@intFromPtr` retains them. The "Beacon" prefix check is runtime-decoded too. CRT names stay literal. The XOR key is a mutable global so the optimizer can't fold the decode back into plaintext.
+- **Opaque trailer magic** — same `0x7C 0x53 0x9A 0x2E 0xD1 0x04 0xB8 0x6F 0x11 0xA3` as the Rust implant / `tools/stubbuilder` / Go `stub_patcher.go`.
+
+Verified: `zig build -Doptimize=ReleaseSmall` → 150 KB, no `Beacon*`/`implant`/`ruststrike`/`zig-implant` strings, entropy 6.618 bits/byte, VERSIONINFO present, and the full connect + sysinfo + cmd_exec + proc_list flow still works against the Go core.
+
 ### Running the whole stack
 
 ```sh
