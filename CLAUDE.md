@@ -150,6 +150,24 @@ Run dev (hot reload): `cd clients/client && wails dev` (vite pinned to `127.0.0.
 
 Verified: `npm run build` (typecheck + vite) clean, `wails build` produces `xstrike.exe`, and the real backend chain (core task store + implant + ps/ls/cmd_exec/download/upload) is verified end-to-end via REST. Visual/interactive GUI verification requires running `wails dev` on a desktop session.
 
+### Zig implant (`zig-implant/`)
+
+A Zig port of the Rust implant (`crates/implant` + `loader` + `protocol`) — a second, language-alternate BOF agent that is wire- and behavior-compatible with the Rust one. Reverse-connects to the Go core, speaks the same newline-JSON protocol, runs BOFs **in-process** via its own COFF loader, returns captured output, and acts as a TCP pivot/relay. x64 Windows only; built with **Zig 0.16** (`scoop install zig`). See `zig-implant/README.md`.
+
+```sh
+cd zig-implant && zig build -Doptimize=ReleaseSmall   # -> zig-out/bin/zig-implant{,-silent}.exe (~140 KB)
+```
+
+Two targets share one root source (`src/main.zig`): `zig-implant` (console) and `zig-implant-silent` (GUI subsystem, no console window — the deployed form). `build.zig` sets `exe_silent.subsystem = .windows`.
+
+**Zig 0.16 caveat** — 0.16 removed `std.net` and `std.fs` file ops (moved into the experimental `std.Io` framework) and `std.process.argsAlloc`/`GeneralPurposeAllocator`. The implant is Windows-only, so it sidesteps `std.Io` entirely and talks Win32 directly: Winsock via `@extern` (`src/net.zig`), `CreateFileA`/`ReadFile` for trailer/exe reads (`src/winapi.zig`), `GetCommandLineA` + tokenizer for args (`src/agent.zig::parseCliArgs`), `std.heap.smp_allocator` (relay spawns threads), `std.atomic.Mutex` (spinlock — no blocking `Thread.Mutex` in 0.16), and AT&T-syntax inline asm for `__chkstk` (`src/loader/crt.zig`).
+
+Module map: `agent.zig`↔`crates/implant/src/lib.rs` (run loop, trailer + CLI resolution, dispatch), `protocol.zig`↔`crates/protocol` (snake_case `type`, base64, JSON escaper), `relay.zig`↔implant relay (bind/accept/splice), `loader/coff.zig`↔`obj.rs`, `loader/exec.zig`↔`exec.rs` (VirtualAlloc RWX, thunk+ptr external slots, AMD64 relocs with mingw +1 numbering), `loader/beacon.zig`↔`stubs.rs` (CS 4.x `datap`, `BeaconPrintf` r8/r9 capture), `loader/crt.zig`↔rt_* (memcpy/memset/strlen/`__chkstk`). All cross-file invariants (`datap` layout, toolchain reloc numbering, `__imp_` handling, `__chkstk` rax preservation, trailer magic) are shared with the Rust loader.
+
+`boftest.zig` is a standalone loader harness (not in `build.zig`): `zig build-exe boftest.zig -target x86_64-windows-msvc -ODebug && ./boftest.exe ../examples/hello.x64.o`.
+
+Verified end-to-end against the Go core: reverse-connect, `hello`, BOF exec (`hello`/`sysinfo` auto-collect/`cmd_exec whoami`/`proc_list`), operator-driven BOF via REST task-poll, and pivot/relay (a child implant connected through a relay port appears at the core as a normal new implant). Same trailer magic as `tools/stubbuilder` + Go `stub_patcher.go`.
+
 ### Running the whole stack
 
 ```sh
