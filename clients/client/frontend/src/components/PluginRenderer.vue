@@ -114,8 +114,7 @@ import { ref, reactive, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import { useToastStore } from '../stores/toast'
 import type { PluginPanelLayout, PluginAction } from '../stores/plugin'
-import { encodeBeaconString } from '../services/bofEncoding'
-import { pollTaskResult, queueBofTask } from '../services/tasks'
+import { runPluginBofAction } from '../services/pluginActions'
 
 const props = defineProps<{
   layout: PluginPanelLayout
@@ -179,25 +178,7 @@ const executeAction = async (action: PluginAction) => {
     executing.value = true
     result.value = ''
     try {
-      let args: number[] | undefined
-      if (action.args_map && typeof action.args_map === 'object') {
-        const entries = Object.entries(action.args_map).sort((a, b) => (a[1] as number) - (b[1] as number))
-        const allBytes: number[] = []
-        for (const [fieldName] of entries) {
-          const val = String(formData[fieldName] || '')
-          allBytes.push(...encodeBeaconString(val))
-        }
-        args = allBytes
-      }
-
-      const taskId = await queueBofTask({
-        nodeId: props.targetId,
-        bof: { name: action.bof_name, plugin_name: action.plugin_name || '' },
-        args,
-        source: `plugin:${action.bof_name}`,
-        auditInput: Object.entries(formData).map(([key, value]) => `${key}=${String(value)}`).join(' ')
-      })
-      const taskResult = await pollTaskResult(taskId, { maxRetry: 60 })
+      const taskResult = await runPluginBofAction(action, props.targetId, formData)
       resultSuccess.value = taskResult.success
       resultClass.value = taskResult.success ? 'pr-result-ok' : 'pr-result-err'
       result.value = taskResult.output || taskResult.error || 'No output'

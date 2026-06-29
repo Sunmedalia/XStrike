@@ -263,6 +263,8 @@ import { useContextMenuStore } from '../stores/contextMenu'
 import { useToastStore } from '../stores/toast'
 import { useConnectionStore } from '../stores/connection'
 import { useEventStream } from '../composables/useEventStream'
+import { useDashboardTabs } from '../composables/useDashboardTabs'
+import type { AgentView, PersistenceMode, TabDef } from '../composables/useDashboardTabs'
 import {
   RefreshCw, LogOut, Search, Sun, Moon,
   TerminalSquare, Package, Radio, Monitor, FileText,
@@ -273,7 +275,7 @@ import {
 import api from '../services/api'
 import { asset } from '../runtime/env'
 import { apiFetch } from '../runtime/network'
-import { queueBofTask } from '../services/tasks'
+import { queuePluginBofAction } from '../services/pluginActions'
 
 import BeaconTable from '../components/BeaconTable.vue'
 import Terminal from '../components/Terminal.vue'
@@ -381,7 +383,6 @@ const togglePlatform = (event?: MouseEvent) => {
 const filter = ref('')
 const searchFocus = ref(false)
 const searchEl = ref<HTMLInputElement>()
-const activeTab = ref('console')
 const syncing = ref(false)
 const clock = ref('')
 const vncManualId = ref('')
@@ -396,22 +397,6 @@ const vncSessionCount    = ref(0)
 
 const btmFullscreen = ref(false)
 const topFullscreen = ref(false)
-type AgentView = 'cmd' | 'powershell' | 'files' | 'processes' | 'persistence' | 'shellcode' | 'screenshots'
-type PersistenceMode = 'schtask' | 'service' | 'critical' | 'user'
-
-interface TabDef {
-  id: string
-  label: string
-  icon?: any
-  closable?: boolean
-  type?: 'agent' | 'vnc' | 'plugin-panel'
-  beaconId?: string
-  nodeId?: string
-  initialView?: AgentView
-  persistenceMode?: PersistenceMode
-  panelLayout?: any
-}
-
 const fixedTabs: TabDef[] = [
   { id: 'console',   label: 'Console',   icon: TerminalSquare },
   { id: 'library',   label: 'Library',   icon: Package },
@@ -420,11 +405,16 @@ const fixedTabs: TabDef[] = [
   { id: 'vnc',       label: 'VNC',       icon: Monitor },
   { id: 'log',       label: 'Log',       icon: FileText },
 ]
-const dynTabs = ref<TabDef[]>([])
-const allTabs = computed<TabDef[]>(() => [
-  ...fixedTabs,
-  ...dynTabs.value,
-])
+const {
+  activeTab,
+  dynTabs,
+  allTabs,
+  openAgentTab,
+  openVncTab,
+  openPluginPanelTab,
+  isClosable,
+  closeTab,
+} = useDashboardTabs(fixedTabs)
 
 // ─── Computed ───
 const totalCount = computed(() => appStore.beacons.length)
@@ -492,19 +482,12 @@ const openBeaconView = (beacon: any, view: AgentView, pm: PersistenceMode = 'sch
     return
   }
   const bid = beacon.node_id || beacon.id
-  const tabId = `beacon-${bid}`
-  const existing = dynTabs.value.find(t => t.id === tabId)
-  if (!existing) {
-    dynTabs.value.push({
-      id: tabId, label: beacon.computer || bid.slice(0, 10),
-      type: 'agent', closable: true, beaconId: bid,
-      initialView: view, persistenceMode: pm,
-    })
-  } else {
-    existing.initialView = view
-    if (view === 'persistence') existing.persistenceMode = pm
-  }
-  activeTab.value = tabId
+  openAgentTab({
+    beaconId: bid,
+    label: beacon.computer || bid.slice(0, 10),
+    initialView: view,
+    persistenceMode: pm,
+  })
 }
 
 const onInteract = (beacon: any) => openBeaconView(beacon, 'cmd')
@@ -564,12 +547,7 @@ const executePluginAction = async (action?: PluginAction, beaconId?: string) => 
     }
     if (!action.bof_name) return
     try {
-      await queueBofTask({
-        nodeId: targetId,
-        bof: { name: action.bof_name, plugin_name: action.plugin_name || '' },
-        source: `plugin:${action.bof_name}`,
-        auditInput: '(none)'
-      })
+      await queuePluginBofAction(action, targetId)
       toastStore.success(`BOF task created: ${action.bof_name}`)
     } catch {
       toastStore.error('Plugin BOF execution failed')
@@ -586,18 +564,12 @@ const openPluginPanel = (panelId: string, beaconId?: string) => {
     if (m.panels) {
       for (const panel of m.panels) {
         if (panel.id === panelId) {
-          const tabId = `plugin-${panelId}`
-          if (!dynTabs.value.find(t => t.id === tabId)) {
-            dynTabs.value.push({
-              id: tabId,
-              label: panel.title,
-              type: 'plugin-panel',
-              closable: true,
-              beaconId: beaconId,
-              panelLayout: panel.layout,
-            })
-          }
-          activeTab.value = tabId
+          openPluginPanelTab({
+            panelId,
+            label: panel.title,
+            beaconId,
+            layout: panel.layout,
+          })
           return
         }
       }
@@ -730,14 +702,9 @@ const refreshVnc = async () => {
 const fmtVncTime = (ts: number) => ts ? new Date(ts * 1000).toLocaleTimeString([], { hour12: false }) : '—'
 
 const openVnc = (s: { node_id: string }) => {
-  if (!s.node_id?.trim()) return
-  const nid = s.node_id.trim()
-  const tabId = `vnc-${nid}`
-  if (!dynTabs.value.find(t => t.id === tabId)) {
-    dynTabs.value.push({ id: tabId, label: `VNC:${nid.slice(0, 8)}`, type: 'vnc', closable: true, nodeId: nid })
+  if (openVncTab(s.node_id || '')) {
+    vncManualId.value = ''
   }
-  activeTab.value = tabId
-  vncManualId.value = ''
 }
 
 const killVnc = async (s: any) => {
@@ -747,19 +714,6 @@ const killVnc = async (s: any) => {
     dynTabs.value = dynTabs.value.filter(t => t.id !== `vnc-${s.node_id}`)
     if (activeTab.value === `vnc-${s.node_id}`) activeTab.value = 'console'
   } catch { /* ignore */ }
-}
-
-// ─── Tab management ───
-const isClosable = (id: string) => !fixedTabs.some(f => f.id === id)
-
-const closeTab = (id: string) => {
-  if (activeTab.value === id) {
-    const all = allTabs.value
-    const idx = all.findIndex(t => t.id === id)
-    const next = all[idx + 1] || all[idx - 1] || all[0]
-    activeTab.value = next?.id ?? 'console'
-  }
-  dynTabs.value = dynTabs.value.filter(t => t.id !== id)
 }
 
 // ─── Auth ───
