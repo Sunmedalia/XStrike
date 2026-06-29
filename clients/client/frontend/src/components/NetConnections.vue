@@ -52,7 +52,7 @@ import { Search, RefreshCw } from 'lucide-vue-next'
 import api from '../services/api'
 import { useToastStore } from '../stores/toast'
 import { useAppStore } from '../stores/app'
-import { auditTaskInput } from '../services/taskAudit'
+import { findBofByPattern, runBofTask } from '../services/tasks'
 
 const netCache: Map<string, any[]> = (() => {
   const g = globalThis as any
@@ -71,32 +71,10 @@ const protoFilter = ref<'all' | 'TCP' | 'UDP'>('all')
 const conns = ref<any[]>([])
 const loading = ref(false)
 
-const findBof = (pattern: RegExp) => appStore.bofs.find(b => pattern.test(b.name))
+const findBof = (pattern: RegExp) => findBofByPattern(appStore.bofs, pattern)
 
 const updateCache = () => {
   netCache.set(props.targetId, [...conns.value])
-}
-
-const pollTaskResult = async (taskId: string, maxRetry = 60): Promise<any> => {
-  for (let i = 0; i < maxRetry; i++) {
-    try {
-      const res = await api.get(`/tasks/${taskId}`, {
-        silentError: true,
-        validateStatus: (s: number) => s === 200 || s === 404
-      } as any)
-      if (res.status === 404) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        continue
-      }
-      if (res.data.success && res.data.data) {
-        return res.data.data
-      }
-    } catch (err: any) {
-      throw err
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000))
-  }
-  throw new Error('Task timeout')
 }
 
 const parseRows = (raw: string) =>
@@ -162,17 +140,12 @@ const refreshNet = async (force = false) => {
       return
     }
 
-    await auditTaskInput({
-      source: 'net:list',
+    const result = await runBofTask({
       nodeId: props.targetId,
-      input: '(netstat)'
-    })
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: bof.name,
-      plugin_name: bof.plugin_name || ''
-    })
-    const result = await pollTaskResult(res.data.data, 60)
+      bof,
+      source: 'net:list',
+      auditInput: '(netstat)'
+    }, { maxRetry: 60 })
     if (!result.success) {
       toast.error(result.error || 'Network enumeration failed')
       return

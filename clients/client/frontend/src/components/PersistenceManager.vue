@@ -149,8 +149,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ShieldPlus, RefreshCw, Trash2, CalendarClock, Wrench, Skull, UserPlus } from 'lucide-vue-next'
 import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
-import api from '../services/api'
-import { auditTaskInput } from '../services/taskAudit'
+import { encodeBeaconString } from '../services/bofEncoding'
+import { pollTaskResult, queueBofTask } from '../services/tasks'
 
 type PersistMode = 'schtask' | 'service' | 'critical' | 'user'
 
@@ -213,11 +213,6 @@ const loadItems = () => {
   catch { items.value = [] }
 }
 
-const encodeBeaconString = (value: string): number[] => {
-  const bytes = Array.from(new TextEncoder().encode(value))
-  const len = bytes.length + 1
-  return [len & 0xff, (len >> 8) & 0xff, ...bytes, 0]
-}
 const encodeLen16NoNull = (value: string): number[] => {
   const bytes = Array.from(new TextEncoder().encode(value))
   const len = bytes.length
@@ -244,19 +239,6 @@ const findUserCreateBof = (m: string) => {
   return null
 }
 
-const pollTaskResult = async (taskId: string, maxRetry = 120): Promise<any> => {
-  for (let i = 0; i < maxRetry; i++) {
-    try {
-      const res = await api.get(`/tasks/${taskId}`, { silentError: true } as any)
-      if (res.data.success && res.data.data) return res.data.data
-    } catch (err: any) {
-      if (err?.response?.status !== 404) throw err
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000))
-  }
-  throw new Error('Task timeout')
-}
-
 const queueAndTrack = async (
   kind: string, bofName: string, pluginName: string, argsText: string,
   args?: number[], opts?: { silentToast?: boolean }
@@ -264,22 +246,20 @@ const queueAndTrack = async (
   if (!targetId.value) return
   loading.value = true
   try {
-    const payload: any = {
-      node_id: targetId.value,
-      bof_name: bofName,
-      plugin_name: pluginName,
-    }
-    if (args && args.length) payload.args = args
-    await auditTaskInput({ source: `persistence:${kind}`, nodeId: targetId.value, input: argsText || '(none)' })
-    const res = await api.post('/bof/execute', payload)
-    const taskId = res.data.data
+    const taskId = await queueBofTask({
+      nodeId: targetId.value,
+      bof: { name: bofName, plugin_name: pluginName },
+      args: args && args.length ? args : undefined,
+      source: `persistence:${kind}`,
+      auditInput: argsText || '(none)'
+    })
     const entry: PersistItem = {
       id: `${Date.now()}-${Math.random()}`, kind, nodeId: targetId.value,
       bofName, taskId, argsText, status: 'pending', output: '', error: ''
     }
     items.value.unshift(entry)
     saveItems()
-    const result = await pollTaskResult(taskId, 120)
+    const result = await pollTaskResult(taskId, { maxRetry: 120 })
     entry.status = result.success ? 'success' : 'error'
     entry.output = result.output || ''
     entry.error = result.error || ''
@@ -364,7 +344,7 @@ const refreshItems = async () => {
   const pending = items.value.filter(i => i.status === 'pending')
   for (const p of pending) {
     try {
-      const r = await pollTaskResult(p.taskId, 1)
+      const r = await pollTaskResult(p.taskId, { maxRetry: 1 })
       p.status = r.success ? 'success' : 'error'
       p.output = r.output || ''
       p.error = r.error || ''

@@ -38,10 +38,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import api from '../services/api'
 import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
-import { auditTaskInput } from '../services/taskAudit'
+import { pollTaskResult, queueBofTask } from '../services/tasks'
 
 const props = defineProps<{ targetId: string }>()
 const appStore = useAppStore()
@@ -111,26 +110,6 @@ const findMethodBof = (methodName: string) => {
   return appStore.bofs.find((b: any) => b.name.toLowerCase().replace(/\.o$/i, '') === methodName.toLowerCase())
 }
 
-const pollTaskResult = async (taskId: string, maxRetry = 120): Promise<any> => {
-  for (let i = 0; i < maxRetry; i++) {
-    try {
-      const res = await api.get(`/tasks/${taskId}`, {
-        silentError: true,
-        validateStatus: (s: number) => s === 200 || s === 404
-      } as any)
-      if (res.status === 404) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        continue
-      }
-      if (res.data.success && res.data.data) return res.data.data
-    } catch (err: any) {
-      throw err
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000))
-  }
-  throw new Error('Task timeout')
-}
-
 const executeBytes = async (bytes: number[], source: string) => {
   const bof = findMethodBof(method.value)
   if (!bof) {
@@ -142,19 +121,15 @@ const executeBytes = async (bytes: number[], source: string) => {
     const len = bytes.length
     const args = [len & 0xff, (len >> 8) & 0xff, ...bytes]
     outputLines.value.push({ text: `Executing ${bytes.length} bytes via ${method.value}`, type: 'info' })
-    await auditTaskInput({
-      source: `shellcode:${source}`,
+    const taskId = await queueBofTask({
       nodeId: props.targetId,
-      input: `${method.value} bytes=${bytes.length}`
+      bof,
+      args,
+      source: `shellcode:${source}`,
+      auditInput: `${method.value} bytes=${bytes.length}`
     })
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: bof.name,
-      plugin_name: bof.plugin_name || '',
-      args
-    })
-    taskBanner.value = res.data.data
-    const result = await pollTaskResult(res.data.data, 120)
+    taskBanner.value = taskId
+    const result = await pollTaskResult(taskId, { maxRetry: 120 })
     outputLines.value.push({
       text: result.output || result.error || '(empty)',
       type: result.success ? 'info' : 'error'

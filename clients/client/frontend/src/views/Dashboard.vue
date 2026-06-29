@@ -273,6 +273,7 @@ import {
 import api from '../services/api'
 import { asset } from '../runtime/env'
 import { apiFetch } from '../runtime/network'
+import { queueBofTask } from '../services/tasks'
 
 import BeaconTable from '../components/BeaconTable.vue'
 import Terminal from '../components/Terminal.vue'
@@ -563,15 +564,13 @@ const executePluginAction = async (action?: PluginAction, beaconId?: string) => 
     }
     if (!action.bof_name) return
     try {
-      const payload: any = {
-        node_id: targetId,
-        bof_name: action.bof_name,
-        plugin_name: action.plugin_name || '',
-      }
-      const res = await api.post('/bof/execute', payload)
-      if (res.data.success) {
-        toastStore.success(`BOF task created: ${action.bof_name}`)
-      }
+      await queueBofTask({
+        nodeId: targetId,
+        bof: { name: action.bof_name, plugin_name: action.plugin_name || '' },
+        source: `plugin:${action.bof_name}`,
+        auditInput: '(none)'
+      })
+      toastStore.success(`BOF task created: ${action.bof_name}`)
     } catch {
       toastStore.error('Plugin BOF execution failed')
     }

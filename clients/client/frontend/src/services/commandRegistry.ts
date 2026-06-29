@@ -6,7 +6,9 @@
  */
 
 import api from './api'
-import { auditTaskInput } from './taskAudit'
+import { encodeBeaconString } from './bofEncoding'
+import { queueBofTask } from './tasks'
+export { encodeBeaconString } from './bofEncoding'
 
 // ─── Tokenizer ──────────────────────────────────────────────────────────
 
@@ -46,13 +48,6 @@ export function tokenize(input: string): string[] {
 }
 
 // ─── Beacon arg encoder helpers ─────────────────────────────────────────
-
-/** Encode a string to beacon format: 2-byte LE length + UTF-8 bytes + null */
-export function encodeBeaconString(str: string): number[] {
-  const bytes = Array.from(new TextEncoder().encode(str))
-  const len = bytes.length + 1 // +1 for null terminator
-  return [len & 0xff, (len >> 8) & 0xff, ...bytes, 0]
-}
 
 /** Encode raw bytes (no beacon string wrapper, just the bytes) */
 export function encodeRawBytes(hex: string): number[] {
@@ -510,25 +505,15 @@ function bofExecute(
     if (args === null) return // encoder showed error/help
     ctx.setLoading(true)
     try {
-      await auditTaskInput({
-        source: `console:${tokens[0]}`,
+      const taskId = await queueBofTask({
         nodeId: ctx.targetId || '',
-        input: tokens.join(' ')
+        bof: { name: bofName, plugin_name: pluginName },
+        args: args.length > 0 ? args : undefined,
+        source: `console:${tokens[0]}`,
+        auditInput: tokens.join(' ')
       })
-      const payload: any = {
-        node_id: ctx.targetId,
-        bof_name: bofName,
-        plugin_name: pluginName,
-      }
-      if (args.length > 0) payload.args = args
-      const res = await api.post('/bof/execute', payload)
-      if (res.data.success) {
-        const taskId = res.data.data
-        ctx.setTaskBanner(taskId)
-        await ctx.pollTask(taskId)
-      } else {
-        ctx.pushLine(`Execute failed: ${res.data.error || 'unknown'}`, 'error')
-      }
+      ctx.setTaskBanner(taskId)
+      await ctx.pollTask(taskId)
     } catch {
       ctx.pushLine('BOF execution failed.', 'error')
     } finally {

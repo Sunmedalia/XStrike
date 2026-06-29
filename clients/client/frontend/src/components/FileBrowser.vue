@@ -98,7 +98,8 @@ import { useToastStore } from '../stores/toast'
 import { useAppStore } from '../stores/app'
 import { useModalStore } from '../stores/modal'
 import ConfirmModal from './ConfirmModal.vue'
-import { auditTaskInput } from '../services/taskAudit'
+import { encodeBeaconString } from '../services/bofEncoding'
+import { findBofByPattern, runBofTask } from '../services/tasks'
 
 type FileBrowserCache = { path: string; files: any[]; parentFiles?: any[] }
 const fileBrowserCache: Map<string, FileBrowserCache> = (() => {
@@ -255,13 +256,7 @@ const getInitialPathFromBeacon = () => {
   return 'C:\\'
 }
 
-const encodeBeaconString = (value: string): number[] => {
-  const bytes = Array.from(new TextEncoder().encode(value))
-  const len = bytes.length + 1
-  return [len & 0xff, (len >> 8) & 0xff, ...bytes, 0]
-}
-
-const findBof = (pattern: RegExp) => appStore.bofs.find(b => pattern.test(b.name))
+const findBof = (pattern: RegExp) => findBofByPattern(appStore.bofs, pattern)
 
 const updateCache = () => {
   fileBrowserCache.set(props.targetId, {
@@ -269,31 +264,6 @@ const updateCache = () => {
     files: [...files.value],
     parentFiles: [...parentFiles.value]
   })
-}
-
-// Poll a BOF task. Default 250ms interval (was 1s) so the panel is responsive
-// — a 60s hard freeze on the toolbar was the "clicks unresponsive" bug. 100
-// retries × 250ms = 25s ceiling, plenty for a directory enumeration round-trip.
-const pollTaskResult = async (taskId: string, maxRetry = 100, intervalMs = 250): Promise<any> => {
-  for (let i = 0; i < maxRetry; i++) {
-    try {
-      const res = await api.get(`/tasks/${taskId}`, {
-        silentError: true,
-        validateStatus: (s: number) => s === 200 || s === 404
-      } as any)
-      if (res.status === 404) {
-        await new Promise(resolve => setTimeout(resolve, intervalMs))
-        continue
-      }
-      if (res.data.success && res.data.data) {
-        return res.data.data
-      }
-    } catch (err: any) {
-      throw err
-    }
-    await new Promise(resolve => setTimeout(resolve, intervalMs))
-  }
-  throw new Error('Task timeout')
 }
 
 const formatSize = (bytes: number) => {
@@ -337,26 +307,22 @@ const loadParentDir = async () => {
     const fileListBof = findBof(/^file_list\b/i)
     if (!fileListBof) return
 
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: fileListBof.name,
-      plugin_name: fileListBof.plugin_name || '',
+    const result = await runBofTask({
+      nodeId: props.targetId,
+      bof: fileListBof,
       args: encodeBeaconString(parentPath.value)
-    })
-    if (res.data.success) {
-      const result = await pollTaskResult(res.data.data)
-      if (myToken !== parentLoadToken.value) return   // a newer nav superseded us
-      if (result.success) {
-        parentFiles.value = parseFileListOutput(result.output || '', true)
-        loadedParentPath.value = parentPath.value
-        // Cache parent directory
-        fileBrowserCache.set(parentCacheKey, {
-          path: parentPath.value,
-          files: [...parentFiles.value]
-        })
-      } else {
-        parentError.value = result.error || 'parent list failed'
-      }
+    }, { maxRetry: 100, intervalMs: 250 })
+    if (myToken !== parentLoadToken.value) return   // a newer nav superseded us
+    if (result.success) {
+      parentFiles.value = parseFileListOutput(result.output || '', true)
+      loadedParentPath.value = parentPath.value
+      // Cache parent directory
+      fileBrowserCache.set(parentCacheKey, {
+        path: parentPath.value,
+        files: [...parentFiles.value]
+      })
+    } else {
+      parentError.value = result.error || 'parent list failed'
     }
   } catch (err: any) {
     // Surface the failure instead of silently blanking the left panel — the
@@ -392,38 +358,31 @@ const refreshFiles = async (canonicalize = false) => {
     // Snapshot the path we're loading so a later nav doesn't make us apply
     // this result to the wrong directory.
     const targetPath = path.value
-    await auditTaskInput({
-      source: 'file:list',
+    const result = await runBofTask({
       nodeId: props.targetId,
-      input: targetPath
-    })
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: fileListBof.name,
-      plugin_name: fileListBof.plugin_name || '',
-      args: encodeBeaconString(targetPath)
-    })
-    if (res.data.success) {
-      const result = await pollTaskResult(res.data.data)
-      if (myToken !== loadToken.value) return   // a newer click supersed us
-      if (!result.success) {
-        toast.error(result.error || 'File list failed')
-        return
-      }
-      // When canonicalizing, let the CWD header write the (normalized) path
-      // back; when click-driven, skip the writeback so the BOF's CWD doesn't
-      // clobber the path the user just chose. Vue's watch only fires on real
-      // value changes (string ===), and loadParentDir is cache-served +
-      // token-guarded, so the parent load is naturally single and non-racing.
-      files.value = parseFileListOutput(result.output || '', !canonicalize)
-      // Record the directory these rows belong to, so click/download navigation
-      // resolves against what's actually displayed (path.value may have raced
-      // ahead if the user clicked again mid-load).
-      displayedPath.value = path.value
-      updateCache()
-      // Parent dir is loaded by watch(path) for free path edits, and by
-      // navigateToPath/refreshCurrentView for controlled navigation.
+      bof: fileListBof,
+      args: encodeBeaconString(targetPath),
+      source: 'file:list',
+      auditInput: targetPath
+    }, { maxRetry: 100, intervalMs: 250 })
+    if (myToken !== loadToken.value) return   // a newer click supersed us
+    if (!result.success) {
+      toast.error(result.error || 'File list failed')
+      return
     }
+    // When canonicalizing, let the CWD header write the (normalized) path
+    // back; when click-driven, skip the writeback so the BOF's CWD doesn't
+    // clobber the path the user just chose. Vue's watch only fires on real
+    // value changes (string ===), and loadParentDir is cache-served +
+    // token-guarded, so the parent load is naturally single and non-racing.
+    files.value = parseFileListOutput(result.output || '', !canonicalize)
+    // Record the directory these rows belong to, so click/download navigation
+    // resolves against what's actually displayed (path.value may have raced
+    // ahead if the user clicked again mid-load).
+    displayedPath.value = path.value
+    updateCache()
+    // Parent dir is loaded by watch(path) for free path edits, and by
+    // navigateToPath/refreshCurrentView for controlled navigation.
   } catch (err: any) {
     if (myToken === loadToken.value) toast.error(err.message || 'Failed to list files')
   } finally {
@@ -534,18 +493,13 @@ const downloadFile = async (file: any) => {
       return
     }
 
-    await auditTaskInput({
-      source: 'file:download',
+    const result = await runBofTask({
       nodeId: props.targetId,
-      input: fullPath
-    })
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: fileDownloadBof.name,
-      plugin_name: fileDownloadBof.plugin_name || '',
-      args: encodeBeaconString(fullPath)
-    })
-    const result = await pollTaskResult(res.data.data, 120)
+      bof: fileDownloadBof,
+      args: encodeBeaconString(fullPath),
+      source: 'file:download',
+      auditInput: fullPath
+    }, { maxRetry: 120 })
     if (!result.success) {
       toast.error(result.error || 'Download failed')
       return
@@ -583,18 +537,13 @@ const deleteFile = async (file: any) => {
       return
     }
     const command = isDirEntry(file) ? `rmdir /s /q "${fullPath}"` : `del /f /q "${fullPath}"`
-    await auditTaskInput({
-      source: 'file:delete',
+    const result = await runBofTask({
       nodeId: props.targetId,
-      input: command
-    })
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: cmdBof.name,
-      plugin_name: cmdBof.plugin_name || '',
-      args: encodeBeaconString(command)
-    })
-    const result = await pollTaskResult(res.data.data, 60)
+      bof: cmdBof,
+      args: encodeBeaconString(command),
+      source: 'file:delete',
+      auditInput: command
+    }, { maxRetry: 60 })
     if (!result.success) {
       toast.error(result.error || 'Delete failed')
       return

@@ -112,9 +112,10 @@
 <script setup lang="ts">
 import { ref, reactive, watch } from 'vue'
 import DOMPurify from 'dompurify'
-import api from '../services/api'
 import { useToastStore } from '../stores/toast'
 import type { PluginPanelLayout, PluginAction } from '../stores/plugin'
+import { encodeBeaconString } from '../services/bofEncoding'
+import { pollTaskResult, queueBofTask } from '../services/tasks'
 
 const props = defineProps<{
   layout: PluginPanelLayout
@@ -178,56 +179,28 @@ const executeAction = async (action: PluginAction) => {
     executing.value = true
     result.value = ''
     try {
-      // Build args from form data using args_map
-      // Beacon string encoding: 2-byte LE length + UTF-8 bytes + null terminator per field
       let args: number[] | undefined
       if (action.args_map && typeof action.args_map === 'object') {
-        // args_map maps field names to their position order
         const entries = Object.entries(action.args_map).sort((a, b) => (a[1] as number) - (b[1] as number))
-        const encoder = new TextEncoder()
         const allBytes: number[] = []
         for (const [fieldName] of entries) {
           const val = String(formData[fieldName] || '')
-          const bytes = Array.from(encoder.encode(val))
-          const len = bytes.length + 1 // +1 for null terminator
-          allBytes.push(len & 0xff, (len >> 8) & 0xff, ...bytes, 0)
+          allBytes.push(...encodeBeaconString(val))
         }
         args = allBytes
       }
 
-      const payload: any = {
-        node_id: props.targetId,
-        bof_name: action.bof_name,
-        plugin_name: action.plugin_name || '',
-      }
-      if (args && args.length > 0) payload.args = args
-
-      const res = await api.post('/bof/execute', payload)
-      if (res.data.success) {
-        const taskId = res.data.data
-        // Poll for task result
-        const MAX_POLL_ATTEMPTS = 60
-        const POLL_INTERVAL_MS = 1000
-        let attempts = 0
-        while (attempts < MAX_POLL_ATTEMPTS) {
-          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
-          try {
-            const taskRes = await api.get(`/tasks/${taskId}`, { silentError: true } as any)
-            if (taskRes.data.success && taskRes.data.data) {
-              const taskResult = taskRes.data.data
-              resultSuccess.value = taskResult.success
-              resultClass.value = taskResult.success ? 'pr-result-ok' : 'pr-result-err'
-              result.value = taskResult.output || taskResult.error || 'No output'
-              break
-            }
-          } catch { /* continue polling */ }
-          attempts++
-        }
-        if (attempts >= MAX_POLL_ATTEMPTS) {
-          result.value = 'Task timed out waiting for result'
-          resultClass.value = 'pr-result-err'
-        }
-      }
+      const taskId = await queueBofTask({
+        nodeId: props.targetId,
+        bof: { name: action.bof_name, plugin_name: action.plugin_name || '' },
+        args,
+        source: `plugin:${action.bof_name}`,
+        auditInput: Object.entries(formData).map(([key, value]) => `${key}=${String(value)}`).join(' ')
+      })
+      const taskResult = await pollTaskResult(taskId, { maxRetry: 60 })
+      resultSuccess.value = taskResult.success
+      resultClass.value = taskResult.success ? 'pr-result-ok' : 'pr-result-err'
+      result.value = taskResult.output || taskResult.error || 'No output'
     } catch (e: any) {
       result.value = e.message || 'Execution failed'
       resultClass.value = 'pr-result-err'

@@ -55,7 +55,8 @@ import { useToastStore } from '../stores/toast'
 import { useAppStore } from '../stores/app'
 import { useModalStore } from '../stores/modal'
 import ConfirmModal from './ConfirmModal.vue'
-import { auditTaskInput } from '../services/taskAudit'
+import { encodeBeaconString } from '../services/bofEncoding'
+import { findBofByPattern, runBofTask } from '../services/tasks'
 
 const processListCache: Map<string, any[]> = (() => {
   const g = globalThis as any
@@ -75,38 +76,10 @@ const selectedProc = ref<any>(null)
 const procs = ref<any[]>([])
 const loading = ref(false)
 
-const encodeBeaconString = (value: string): number[] => {
-  const bytes = Array.from(new TextEncoder().encode(value))
-  const len = bytes.length + 1
-  return [len & 0xff, (len >> 8) & 0xff, ...bytes, 0]
-}
-
-const findBof = (pattern: RegExp) => appStore.bofs.find(b => pattern.test(b.name))
+const findBof = (pattern: RegExp) => findBofByPattern(appStore.bofs, pattern)
 
 const updateCache = () => {
   processListCache.set(props.targetId, [...procs.value])
-}
-
-const pollTaskResult = async (taskId: string, maxRetry = 60): Promise<any> => {
-  for (let i = 0; i < maxRetry; i++) {
-    try {
-      const res = await api.get(`/tasks/${taskId}`, {
-        silentError: true,
-        validateStatus: (s: number) => s === 200 || s === 404
-      } as any)
-      if (res.status === 404) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        continue
-      }
-      if (res.data.success && res.data.data) {
-        return res.data.data
-      }
-    } catch (err: any) {
-      throw err
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000))
-  }
-  throw new Error('Task timeout')
 }
 
 const filteredProcs = computed(() => {
@@ -136,17 +109,12 @@ const refreshProcs = async (force = false) => {
       return
     }
 
-    await auditTaskInput({
-      source: 'process:list',
+    const result = await runBofTask({
       nodeId: props.targetId,
-      input: '(proc_list)'
-    })
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: procListBof.name,
-      plugin_name: procListBof.plugin_name || ''
-    })
-    const result = await pollTaskResult(res.data.data, 60)
+      bof: procListBof,
+      source: 'process:list',
+      auditInput: '(proc_list)'
+    }, { maxRetry: 60 })
     if (!result.success) {
       toast.error(result.error || 'Process list failed')
       return
@@ -190,18 +158,13 @@ const killProc = async () => {
       toast.error('No proc_kill BOF found. Upload proc_kill.o first.')
       return
     }
-    await auditTaskInput({
-      source: 'process:kill',
+    const result = await runBofTask({
       nodeId: props.targetId,
-      input: `pid=${selectedProc.value.pid}`
-    })
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: procKillBof.name,
-      plugin_name: procKillBof.plugin_name || '',
-      args: encodeBeaconString(String(selectedProc.value.pid))
-    })
-    const result = await pollTaskResult(res.data.data, 60)
+      bof: procKillBof,
+      args: encodeBeaconString(String(selectedProc.value.pid)),
+      source: 'process:kill',
+      auditInput: `pid=${selectedProc.value.pid}`
+    }, { maxRetry: 60 })
     if (!result.success) {
       toast.error(result.error || 'Kill process failed')
       return

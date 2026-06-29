@@ -59,10 +59,10 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import api from '../services/api'
 import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
-import { auditTaskInput } from '../services/taskAudit'
+import { encodeRawText } from '../services/bofEncoding'
+import { pollTaskResult, queueBofTask } from '../services/tasks'
 import { dispatch, getCommandNames, getAllCommands, loadBofCommands, isBofCommandsLoaded, type CommandContext } from '../services/commandRegistry'
 
 const props = defineProps<{
@@ -261,24 +261,15 @@ const executeOnBeacon = async (cmd: string) => {
 
     // RustStrike's cmd_exec / powershell_exec / winapi_exec all take the command
     // as RAW UTF-8 bytes (no length prefix). Encode the typed line verbatim.
-    const args = Array.from(new TextEncoder().encode(cmd))
-    await auditTaskInput({
-      source: mode === 'powershell' ? 'terminal:powershell' : mode === 'winapi' ? 'terminal:winapi' : 'terminal:cmd',
+    const taskId = await queueBofTask({
       nodeId: props.targetId || '',
-      input: cmd
+      bof,
+      args: encodeRawText(cmd),
+      source: mode === 'powershell' ? 'terminal:powershell' : mode === 'winapi' ? 'terminal:winapi' : 'terminal:cmd',
+      auditInput: cmd
     })
-
-    const res = await api.post('/bof/execute', {
-      node_id: props.targetId,
-      bof_name: bof.name,
-      plugin_name: bof.plugin_name || '',
-      args
-    })
-    if (res.data.success) {
-      const taskId = res.data.data
-      taskBanner.value = taskId
-      await pollTaskOutput(taskId)
-    }
+    taskBanner.value = taskId
+    await pollTaskOutput(taskId)
   } catch (err) {
     lines.value.push({ text: 'Command execution failed', type: 'error' })
   } finally {
@@ -288,30 +279,15 @@ const executeOnBeacon = async (cmd: string) => {
 }
 
 const pollTaskOutput = async (taskId: string) => {
-  for (let i = 0; i < 120; i++) {
-    try {
-      const res = await api.get(`/tasks/${taskId}`, {
-        silentError: true,
-        validateStatus: (s: number) => s === 200 || s === 404
-      } as any)
-      if (res.status === 404) {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        continue
-      }
-      if (res.data.success && res.data.data) {
-        const result = res.data.data
-        const text = result.output || result.error || '(empty)'
-        lines.value.push({ text, type: result.success ? 'info' : 'error' })
-        await appStore.fetchLogs()
-        return
-      }
-    } catch {
-      break
-    }
-    await new Promise(resolve => setTimeout(resolve, 1000))
+  try {
+    const result = await pollTaskResult(taskId, { maxRetry: 120 })
+    const text = result.output || result.error || '(empty)'
+    lines.value.push({ text, type: result.success ? 'info' : 'error' })
+    await appStore.fetchLogs()
+  } catch {
+    toast.error(`Task timeout: ${taskId}`)
+    lines.value.push({ text: 'Task timed out after 120s', type: 'error' })
   }
-  toast.error(`Task timeout: ${taskId}`)
-  lines.value.push({ text: 'Task timed out after 120s', type: 'error' })
 }
 
 const processConsoleCommand = async (cmd: string) => {
