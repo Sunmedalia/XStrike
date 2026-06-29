@@ -6,7 +6,9 @@
  */
 
 import api from './api'
-import { auditTaskInput } from './taskAudit'
+import { createBofCommand } from './bofCommandFactory'
+import type { BofCommandMeta } from './bofCommandEncoding'
+export { encodeBeaconString } from './bofEncoding'
 
 // ─── Tokenizer ──────────────────────────────────────────────────────────
 
@@ -43,27 +45,6 @@ export function tokenize(input: string): string[] {
     }
   }
   return tokens
-}
-
-// ─── Beacon arg encoder helpers ─────────────────────────────────────────
-
-/** Encode a string to beacon format: 2-byte LE length + UTF-8 bytes + null */
-export function encodeBeaconString(str: string): number[] {
-  const bytes = Array.from(new TextEncoder().encode(str))
-  const len = bytes.length + 1 // +1 for null terminator
-  return [len & 0xff, (len >> 8) & 0xff, ...bytes, 0]
-}
-
-/** Encode raw bytes (no beacon string wrapper, just the bytes) */
-export function encodeRawBytes(hex: string): number[] {
-  const cleaned = hex.replace(/\s+/g, '')
-  const bytes: number[] = []
-  for (let i = 0; i < cleaned.length; i += 2) {
-    const b = parseInt(cleaned.substring(i, i + 2), 16)
-    if (isNaN(b)) throw new Error(`Invalid hex at position ${i}: "${cleaned.substring(i, i + 2)}"`)
-    bytes.push(b)
-  }
-  return bytes
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────
@@ -478,216 +459,9 @@ def({
 
 // ── Dynamic BOF Commands ────────────────────────────────────────────────
 
-/** BOF command metadata from server */
-interface BofCommandMeta {
-  bof_name: string
-  cmd_name: string
-  aliases: string
-  description: string
-  category: string
-  args_json: string
-  encode_type: string  // none | beacon_string | raw_string | raw_hex | raw_hex_short | beacon_string_multi
-  destructive: boolean
-  help_extra: string
-  enabled: boolean
-  plugin_name?: string
-}
-
-function bofExecute(
-  bofName: string,
-  pluginName: string,
-  argsEncoder: (tokens: string[], ctx: CommandContext) => number[] | null
-) {
-  return async (tokens: string[], ctx: CommandContext) => {
-    const available = ctx.appStore.bofs.find(
-      (b: any) => b.name === bofName && (b.plugin_name || '') === pluginName
-    )
-    if (!available) {
-      ctx.pushLine(`BOF not available: ${bofName}. Upload it first.`, 'error')
-      return
-    }
-    const args = argsEncoder(tokens, ctx)
-    if (args === null) return // encoder showed error/help
-    ctx.setLoading(true)
-    try {
-      await auditTaskInput({
-        source: `console:${tokens[0]}`,
-        nodeId: ctx.targetId || '',
-        input: tokens.join(' ')
-      })
-      const payload: any = {
-        node_id: ctx.targetId,
-        bof_name: bofName,
-        plugin_name: pluginName,
-      }
-      if (args.length > 0) payload.args = args
-      const res = await api.post('/bof/execute', payload)
-      if (res.data.success) {
-        const taskId = res.data.data
-        ctx.setTaskBanner(taskId)
-        await ctx.pollTask(taskId)
-      } else {
-        ctx.pushLine(`Execute failed: ${res.data.error || 'unknown'}`, 'error')
-      }
-    } catch {
-      ctx.pushLine('BOF execution failed.', 'error')
-    } finally {
-      ctx.setLoading(false)
-    }
-  }
-}
-
-/** Build an args encoder based on encode_type and args definition */
-function buildEncoder(
-  meta: BofCommandMeta,
-  parsedArgs: CommandArg[]
-): (tokens: string[], ctx: CommandContext) => number[] | null {
-  const { encode_type, cmd_name } = meta
-
-  return (tokens: string[], ctx: CommandContext) => {
-    // Validate required args
-    const argTokens = tokens.slice(1).filter(t => t !== '--force')
-    const requiredCount = parsedArgs.filter(a => a.required).length
-    if (argTokens.length < requiredCount) {
-      const usage = parsedArgs.map(a => a.required ? `<${a.name}>` : `[${a.name}]`).join(' ')
-      ctx.pushLine(`Usage: ${cmd_name} ${usage}`, 'error')
-      if (meta.help_extra) ctx.pushLine(meta.help_extra, 'info')
-      return null
-    }
-
-    switch (encode_type) {
-      case 'none':
-        return []
-
-      case 'beacon_string': {
-        const input = argTokens.join(' ')
-        if (!input) return []
-        return encodeBeaconString(input)
-      }
-
-      case 'raw_string': {
-        // RustStrike BOFs that take a single string arg read it as RAW UTF-8
-        // bytes with no length prefix (e.g. cmd_exec, ls, download). Join the
-        // tokens with a space so multi-word args (paths, commands) survive.
-        const input = argTokens.join(' ')
-        if (!input) return []
-        return Array.from(new TextEncoder().encode(input))
-      }
-
-      case 'raw_hex': {
-        const hexStr = argTokens.join(' ')
-        if (!hexStr) {
-          ctx.pushLine(`Usage: ${cmd_name} <hex bytes>`, 'error')
-          return null
-        }
-        try {
-          const raw = encodeRawBytes(hexStr)
-          const len = raw.length
-          return [len & 0xff, (len >> 8) & 0xff, (len >> 16) & 0xff, (len >> 24) & 0xff, ...raw]
-        } catch (e: any) {
-          ctx.pushLine(`Invalid hex: ${e.message}`, 'error')
-          return null
-        }
-      }
-
-      case 'raw_hex_short': {
-        // [2-byte LE length][raw bytes] — the framing ShellcodeExecutor.vue
-        // uses for shellcode_exec* (and matches the BOFs' 2-byte-LE arg reader).
-        const hexStr = argTokens.join(' ')
-        if (!hexStr) {
-          ctx.pushLine(`Usage: ${cmd_name} <hex bytes>`, 'error')
-          return null
-        }
-        try {
-          const raw = encodeRawBytes(hexStr)
-          const len = raw.length
-          if (len > 0xffff) {
-            ctx.pushLine(`Shellcode too large for 2-byte length (>65535 bytes)`, 'error')
-            return null
-          }
-          return [len & 0xff, (len >> 8) & 0xff, ...raw]
-        } catch (e: any) {
-          ctx.pushLine(`Invalid hex: ${e.message}`, 'error')
-          return null
-        }
-      }
-
-      case 'beacon_string_multi': {
-        const result: number[] = []
-        for (const t of argTokens) {
-          result.push(...encodeBeaconString(t))
-        }
-        return result
-      }
-
-      case 'cs_packed': {
-        // Cobalt-Strike packed format: [4-byte BIG-endian length][bytes], no
-        // null (the BOF null-terminates from the length). One blob for the
-        // whole joined arg line — used by bofs/ BOFs that read a single
-        // BeaconDataExtract blob (e.g. schtask_persist "name schedule").
-        const input = argTokens.join(' ')
-        if (!input) return []
-        const bytes = Array.from(new TextEncoder().encode(input))
-        const len = bytes.length
-        return [(len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff, ...bytes]
-      }
-
-      case 'cs_packed_multi': {
-        // One CS-packed blob per token — for bofs/ BOFs that read N
-        // BeaconDataExtract blobs (e.g. user_create_net <user> <pass>).
-        const result: number[] = []
-        for (const t of argTokens) {
-          const bytes = Array.from(new TextEncoder().encode(t))
-          const len = bytes.length
-          result.push((len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff, ...bytes)
-        }
-        return result
-      }
-
-      default:
-        // Fallback: treat as beacon_string
-        const fallback = argTokens.join(' ')
-        if (!fallback) return []
-        return encodeBeaconString(fallback)
-    }
-  }
-}
-
 /** Convert a server BofCommandMeta into a CommandDef and register it */
 function registerBofCommand(meta: BofCommandMeta) {
-  let parsedArgs: CommandArg[]
-  try {
-    parsedArgs = JSON.parse(meta.args_json)
-  } catch {
-    parsedArgs = []
-  }
-
-  const encoder = buildEncoder(meta, parsedArgs)
-  const aliases = meta.aliases ? meta.aliases.split(',').map(a => a.trim()).filter(Boolean) : []
-
-  const executeFn = meta.destructive
-    ? async (tokens: string[], ctx: CommandContext) => {
-        if (!tokens.includes('--force')) {
-          ctx.pushLine(`⚠ Destructive command "${meta.cmd_name}" requires --force flag.`, 'error')
-          ctx.pushLine(`Usage: ${meta.cmd_name} --force`, 'info')
-          return
-        }
-        await bofExecute(meta.bof_name, meta.plugin_name || '', encoder)(tokens, ctx)
-      }
-    : bofExecute(meta.bof_name, meta.plugin_name || '', encoder)
-
-  def({
-    name: meta.cmd_name,
-    aliases,
-    description: meta.description || `Execute ${meta.bof_name}`,
-    category: 'bof',
-    type: 'bof',
-    bofName: meta.bof_name,
-    args: parsedArgs,
-    requiresTarget: true,
-    destructive: meta.destructive,
-    execute: executeFn
-  })
+  def(createBofCommand(meta))
 }
 
 /** Remove all dynamically loaded BOF commands from the registry */

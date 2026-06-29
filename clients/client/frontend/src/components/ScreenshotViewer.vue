@@ -41,7 +41,7 @@ import { Camera, Download, X } from 'lucide-vue-next'
 import { useToastStore } from '../stores/toast'
 import { useAppStore } from '../stores/app'
 import api from '../services/api'
-import { auditTaskInput } from '../services/taskAudit'
+import { findBofByPattern, runBofTask } from '../services/tasks'
 
 interface Screenshot {
   id: number
@@ -79,57 +79,26 @@ const saveShots = (agentId: string) => {
   screenshotCache.set(agentId, [...screenshots.value])
 }
 
-const pollTaskResult = async (taskId: string, maxRetry = 120): Promise<any> => {
-  for (let i = 0; i < maxRetry; i++) {
-    try {
-      const result = await api.get(`/tasks/${taskId}`, {
-        silentError: true,
-        validateStatus: (s: number) => s === 200 || s === 404
-      } as any)
-      if (result.status === 404) {
-        await new Promise(r => setTimeout(r, 1000))
-        continue
-      }
-      if (result.data.success && result.data.data) {
-        return result.data.data
-      }
-    } catch (err: any) {
-      if (err?.response?.status !== 404) throw err
-    }
-    await new Promise(r => setTimeout(r, 1000))
-  }
-  throw new Error('Task timeout')
-}
-
 const captureScreenshot = async () => {
   loading.value = true
   try {
     // 先刷新 BOF 列表
     await appStore.fetchBofs()
 
-    const screenshotBof = appStore.bofs.find((b: any) => /^screenshot/i.test(b.name))
+    const screenshotBof = findBofByPattern(appStore.bofs, /^screenshot/i)
 
     if (!screenshotBof) {
       toast.error('No screenshot BOF found. Upload screenshot.o first.')
       return
     }
 
-    await auditTaskInput({
-      source: 'screenshot:capture',
+    const taskResult = await runBofTask({
       nodeId: props.agent.id,
-      input: '(screenshot)'
-    })
-
-    const res = await api.post('/bof/execute', {
-      node_id: props.agent.id,
-      bof_name: screenshotBof.name,
-      plugin_name: screenshotBof.plugin_name || ''
-    })
-
-    const taskResult = await pollTaskResult(res.data.data, 120)
-    console.log('Task result:', taskResult)
+      bof: screenshotBof,
+      source: 'screenshot:capture',
+      auditInput: '(screenshot)'
+    }, { maxRetry: 120 })
     if (!taskResult.success || !taskResult.output) {
-      console.error('Task failed:', taskResult)
       toast.error(`Task failed: ${taskResult.error || 'No output received'}`)
       return
     }
@@ -138,7 +107,6 @@ const captureScreenshot = async () => {
     await appStore.fetchLogs()
     toast.success('Screenshot captured successfully')
   } catch (err: any) {
-    console.error('Screenshot error:', err)
     toast.error(`Screenshot capture failed: ${err.message || err}`)
   } finally {
     loading.value = false

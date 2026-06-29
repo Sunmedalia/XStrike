@@ -41,8 +41,8 @@ import { X } from 'lucide-vue-next'
 import { useModalStore } from '../stores/modal'
 import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
-import api from '../services/api'
-import { auditTaskInput } from '../services/taskAudit'
+import { encodeBeaconString, encodeRawHex } from '../services/bofEncoding'
+import { queueBofTask } from '../services/tasks'
 
 const props = defineProps<{
   bofName: string
@@ -61,51 +61,27 @@ const form = reactive({
   raw_hex: ''
 })
 
-const encodeBeaconString = (text: string): number[] => {
-  const bytes = Array.from(new TextEncoder().encode(text))
-  const len = bytes.length + 1
-  return [len & 0xff, (len >> 8) & 0xff, ...bytes, 0]
-}
-
-const parseHex = (raw: string): number[] => {
-  const cleaned = raw.replace(/\s+/g, '')
-  if (!cleaned) return []
-  if (!/^[0-9a-fA-F]+$/.test(cleaned) || cleaned.length % 2 !== 0) {
-    throw new Error('Raw hex must be even-length hex string')
-  }
-  const bytes: number[] = []
-  for (let i = 0; i < cleaned.length; i += 2) {
-    bytes.push(parseInt(cleaned.slice(i, i + 2), 16))
-  }
-  return bytes
-}
-
 const submit = async () => {
   if (!form.node_id) return alert('Select a target beacon')
   loading.value = true
   try {
-    const payload: any = {
-      node_id: form.node_id,
-      bof_name: form.bof_name,
-      plugin_name: props.pluginName || ''
-    }
+    let args: number[] | undefined
     if (form.command.trim()) {
-      payload.args = encodeBeaconString(form.command.trim())
+      args = encodeBeaconString(form.command.trim())
     } else if (form.raw_hex.trim()) {
-      payload.args = parseHex(form.raw_hex)
+      args = encodeRawHex(form.raw_hex)
     }
 
-    await auditTaskInput({
-      source: 'bof:execute',
+    await queueBofTask({
       nodeId: form.node_id,
-      input: form.command.trim() || form.raw_hex.trim() || '(none)'
+      bof: { name: form.bof_name, plugin_name: props.pluginName || '' },
+      args,
+      source: 'bof:execute',
+      auditInput: form.command.trim() || form.raw_hex.trim() || '(none)'
     })
-    const res = await api.post('/bof/execute', payload)
-    if (res.data.success) {
-      toast.success('BOF execution task created')
-      modalStore.close()
-      appStore.fetchLogs()
-    }
+    toast.success('BOF execution task created')
+    modalStore.close()
+    appStore.fetchLogs()
   } catch (err: any) {
     toast.error(err?.message || 'BOF execution failed')
   } finally {
