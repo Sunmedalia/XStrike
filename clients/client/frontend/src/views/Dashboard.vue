@@ -809,6 +809,7 @@ onMounted(() => {
     onBeaconDeleted: (data) => appStore.handleBeaconDeleted(data),
     onTaskCompleted: (data) => appStore.handleTaskCompleted(data),
     onListenerChanged: (data) => appStore.handleListenerChanged(data),
+    onRelayChanged: () => window.dispatchEvent(new CustomEvent('ghost:relay-changed')),
   })
 
   if (typeof EventSource !== 'undefined') {
