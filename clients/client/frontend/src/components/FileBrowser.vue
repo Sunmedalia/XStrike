@@ -69,7 +69,7 @@
                   <FileIcon v-else :size="14" class="file-icon-svg" />
                 </td>
                 <td class="file-name" :class="{ 'is-dir': isDirEntry(file) }">{{ file.name }}</td>
-                <td class="file-size">{{ isDirEntry(file) ? '-' : formatSize(file.size) }}</td>
+                <td class="file-size">{{ isDirEntry(file) ? '-' : formatSize(file.size || 0) }}</td>
                 <td class="file-date">{{ file.modified || '-' }}</td>
                 <td class="file-actions">
                   <button v-if="!isDirEntry(file)" class="action-btn" @click.stop="downloadFile(file)" title="Download"><Download :size="12" /></button>
@@ -100,8 +100,18 @@ import { useModalStore } from '../stores/modal'
 import ConfirmModal from './ConfirmModal.vue'
 import { encodeBeaconString } from '../services/bofEncoding'
 import { findBofByPattern, runBofTask } from '../services/tasks'
+import {
+  formatFileSize,
+  getParentPath,
+  getPathDisplayName,
+  hasParentPath,
+  isDirectoryEntry,
+  normalizeWindowsPath,
+  parseFileListOutput as parseFileListModel,
+  type FileEntry,
+} from '../services/fileBrowserModel'
 
-type FileBrowserCache = { path: string; files: any[]; parentFiles?: any[] }
+type FileBrowserCache = { path: string; files: FileEntry[]; parentFiles?: FileEntry[] }
 const fileBrowserCache: Map<string, FileBrowserCache> = (() => {
   const g = globalThis as any
   if (!g.__ghostFileBrowserCache) {
@@ -116,9 +126,9 @@ const appStore = useAppStore()
 const modalStore = useModalStore()
 
 const path = ref('C:\\')
-const files = ref<any[]>([])
+const files = ref<FileEntry[]>([])
 const loading = ref(false)
-const parentFiles = ref<any[]>([])
+const parentFiles = ref<FileEntry[]>([])
 const loadingParent = ref(false)
 const selectedFileName = ref('')
 const selectedParentFileName = ref('')
@@ -147,68 +157,32 @@ const nameFilter = ref('')
 const RENDER_CAP = 500
 const parentError = ref('')
 
-/** Normalize a Windows path: uppercase the drive letter, ensure exactly one
- *  trailing backslash (root `C:\` keeps it; `C:` → `C:\`). Stabilizes cache
- *  keys and the path bar so `C:\Windows` and `C:\Windows\` don't diverge. */
-const normalizePath = (p: string): string => {
-  let s = (p || '').replace(/\//g, '\\').trim()
-  if (!s) return 'C:\\'
-  // Uppercase a leading drive letter: `c:\` → `C:\`
-  if (s.length >= 2 && s[1] === ':' && /[a-z]/.test(s[0])) {
-    s = s[0].toUpperCase() + s.slice(1)
-  }
-  // Collapse runs of trailing backslashes, then re-add exactly one — unless
-  // it's a bare drive (`C:`) which needs the slash appended.
-  s = s.replace(/\\+$/, '')
-  if (s.length === 2 && s[1] === ':') s = s + '\\'
-  else if (s.length > 0) s = s + '\\'
-  return s
-}
-
 // Get parent directory path
-const parentPath = computed(() => {
-  const p = path.value.replace(/\\+$/, '')
-  const parts = p.split('\\').filter(Boolean)
-  if (parts.length <= 1) return ''
-  parts.pop()
-  return parts.join('\\') + '\\'
-})
+const parentPath = computed(() => getParentPath(path.value))
 
 // Check if has parent directory
-const hasParent = computed(() => {
-  const parts = path.value.split('\\').filter(Boolean)
-  return parts.length > 1
-})
+const hasParent = computed(() => hasParentPath(path.value))
 
 // Get parent directory name
 const parentDirName = computed(() => {
   if (!hasParent.value) return 'Root'
-  const p = parentPath.value.replace(/\\+$/, '')
-  const parts = p.split('\\').filter(Boolean)
-  return parts[parts.length - 1] || parts[0] || 'Root'
+  return getPathDisplayName(parentPath.value)
 })
 
 // Get current directory name
-const currentDirName = computed(() => {
-  const p = path.value.replace(/\\+$/, '')
-  const parts = p.split('\\').filter(Boolean)
-  return parts[parts.length - 1] || parts[0] || 'Root'
-})
+const currentDirName = computed(() => getPathDisplayName(path.value))
 
-const isDirEntry = (file: any) => {
-  const marker = String(file?.type || file?.kind || '').trim().toUpperCase()
-  return Boolean(file?.is_dir || marker === 'D' || marker === 'DIR' || marker === 'DIRECTORY' || marker === '<DIR>')
-}
+const isDirEntry = isDirectoryEntry
 
 // Check if a file in parent dir is the current directory
-const isCurrentDir = (file: any) => {
+const isCurrentDir = (file: FileEntry) => {
   if (!isDirEntry(file)) return false
   const currentName = currentDirName.value
   return file.name === currentName
 }
 
-const isSelectedFile = (file: any) => file.name === selectedFileName.value
-const isSelectedParentFile = (file: any) => file.name === selectedParentFileName.value && !isCurrentDir(file)
+const isSelectedFile = (file: FileEntry) => file.name === selectedFileName.value
+const isSelectedParentFile = (file: FileEntry) => file.name === selectedParentFileName.value && !isCurrentDir(file)
 
 // Right-panel rows after the client-side name filter, capped to RENDER_CAP so a
 // huge directory (System32) doesn't freeze the DOM. `files` keeps the full set
@@ -266,12 +240,7 @@ const updateCache = () => {
   })
 }
 
-const formatSize = (bytes: number) => {
-  if (!bytes) return '0 B'
-  const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
+const formatSize = formatFileSize
 
 const loadParentDir = async () => {
   if (!hasParent.value) {
@@ -314,7 +283,7 @@ const loadParentDir = async () => {
     }, { maxRetry: 100, intervalMs: 250 })
     if (myToken !== parentLoadToken.value) return   // a newer nav superseded us
     if (result.success) {
-      parentFiles.value = parseFileListOutput(result.output || '', true)
+      parentFiles.value = applyFileListOutput(result.output || '', true)
       loadedParentPath.value = parentPath.value
       // Cache parent directory
       fileBrowserCache.set(parentCacheKey, {
@@ -375,7 +344,7 @@ const refreshFiles = async (canonicalize = false) => {
     // clobber the path the user just chose. Vue's watch only fires on real
     // value changes (string ===), and loadParentDir is cache-served +
     // token-guarded, so the parent load is naturally single and non-racing.
-    files.value = parseFileListOutput(result.output || '', !canonicalize)
+    files.value = applyFileListOutput(result.output || '', !canonicalize)
     // Record the directory these rows belong to, so click/download navigation
     // resolves against what's actually displayed (path.value may have raced
     // ahead if the user clicked again mid-load).
@@ -401,7 +370,7 @@ const navigateToPath = async (nextPath: string, canonicalize = false) => {
   parentLoadToken.value++
   loadingParent.value = false
   parentError.value = ''
-  path.value = normalizePath(nextPath)
+  path.value = normalizeWindowsPath(nextPath)
   files.value = []
   try {
     await refreshFiles(canonicalize)
@@ -416,30 +385,10 @@ const onPathEnter = () => {
   navigateToPath(path.value, true)
 }
 
-const parseFileListOutput = (output: string, skipPathUpdate = false) => {
-  const rows: any[] = []
-  const lines = output.split('\n').map(line => line.trim()).filter(Boolean)
-  for (const line of lines) {
-    if (line.startsWith('CWD:')) {
-      const cwd = line.slice(4).trim()
-      if (cwd && !skipPathUpdate) path.value = normalizePath(cwd)
-      continue
-    }
-    const parts = line.split('\t')
-    if (parts.length < 4) continue
-    const [type, name, sizeRaw, epochRaw] = parts
-    const marker = type.trim().toUpperCase()
-    if (name === '.' || name === '..') continue
-    const epoch = Number(epochRaw) || 0
-    rows.push({
-      name,
-      type: marker,
-      is_dir: marker === 'D' || marker === 'DIR' || marker === 'DIRECTORY' || marker === '<DIR>',
-      size: Number(sizeRaw) || 0,
-      modified: epoch ? new Date(epoch * 1000).toLocaleString() : ''
-    })
-  }
-  return rows
+const applyFileListOutput = (output: string, skipPathUpdate = false) => {
+  const parsed = parseFileListModel(output)
+  if (parsed.cwd && !skipPathUpdate) path.value = normalizeWindowsPath(parsed.cwd)
+  return parsed.rows
 }
 
 const goUp = () => {
@@ -449,11 +398,11 @@ const goUp = () => {
   navigateToPath(parentPath.value, false)
 }
 
-const navigateFromBase = (basePath: string, file: any) => {
+const navigateFromBase = (basePath: string, file: FileEntry) => {
   if (!isDirEntry(file)) return
   const resolvedBase = basePath || displayedPath.value || path.value || 'C:\\'
   const base = resolvedBase.endsWith('\\') ? resolvedBase : resolvedBase + '\\'
-  const nextPath = normalizePath(base + file.name)
+  const nextPath = normalizeWindowsPath(base + file.name)
   if (nextPath === path.value && !loading.value) return
   selectedFileName.value = ''
   selectedParentFileName.value = ''
@@ -461,7 +410,7 @@ const navigateFromBase = (basePath: string, file: any) => {
   navigateToPath(nextPath, false)
 }
 
-const onFileClick = (file: any) => {
+const onFileClick = (file: FileEntry) => {
   selectedFileName.value = file.name
   selectedParentFileName.value = ''
   if (isDirEntry(file)) {
@@ -474,7 +423,7 @@ const onFileClick = (file: any) => {
   }
 }
 
-const onParentFileClick = (file: any) => {
+const onParentFileClick = (file: FileEntry) => {
   selectedParentFileName.value = file.name
   selectedFileName.value = ''
   if (isDirEntry(file)) {
@@ -483,7 +432,7 @@ const onParentFileClick = (file: any) => {
   }
 }
 
-const downloadFile = async (file: any) => {
+const downloadFile = async (file: FileEntry) => {
   const base = displayedPath.value.endsWith('\\') ? displayedPath.value : displayedPath.value + '\\'
   const fullPath = base + file.name
   try {
@@ -527,7 +476,7 @@ const downloadFile = async (file: any) => {
   }
 }
 
-const deleteFile = async (file: any) => {
+const deleteFile = async (file: FileEntry) => {
   const base = displayedPath.value.endsWith('\\') ? displayedPath.value : displayedPath.value + '\\'
   const fullPath = base + file.name
   try {
@@ -555,7 +504,7 @@ const deleteFile = async (file: any) => {
   }
 }
 
-const confirmDeleteFile = (file: any) => {
+const confirmDeleteFile = (file: FileEntry) => {
   modalStore.open(ConfirmModal, {
     title: 'Delete File',
     message: `Delete "${file.name}" on target ${props.targetId}?`,
@@ -579,8 +528,8 @@ const hydrateFileListFromDb = async () => {
     if (!arts.length) return
     const meta = arts[0].meta
     if (!meta) return
-    // parseFileListOutput(canonicalize=true) sets path from the CWD: line.
-    const rows = parseFileListOutput(meta, false)
+    // applyFileListOutput(canonicalize=true) sets path from the CWD: line.
+    const rows = applyFileListOutput(meta, false)
     if (rows.length || path.value) {
       files.value = rows
       displayedPath.value = path.value
@@ -600,7 +549,7 @@ onMounted(async () => {
       loadedParentPath.value = parentPath.value
     }
   } else {
-    path.value = normalizePath(getInitialPathFromBeacon())
+    path.value = normalizeWindowsPath(getInitialPathFromBeacon())
     displayedPath.value = path.value
     // Canonicalize on first load so the BOF's CWD can correct the initial path.
     await navigateToPath(path.value, true)
