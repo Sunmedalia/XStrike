@@ -1,0 +1,11 @@
+# RustStrike short-cycle beacon — short-lived connections on a cadence.
+# Each cycle: connect + hello, drain commands for the dwell window, close,
+# sleep, repeat. Traffic is periodic short pulses (not a persistent channel).
+id = "ruststrike-beacon-cycle"
+name = "RustStrike Beacon (Short-Cycle)"
+description = "Short-cycle beacon: short-lived connections, sleeps between check-ins"
+base = "ruststrike-beacon-cycle.exe"
+variant = "beacon-cycle"
+supports = ["silent", "sleep", "dwell"]
+default_sleep = 5
+default_dwell = 2

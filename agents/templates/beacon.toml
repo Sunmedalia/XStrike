@@ -1,0 +1,9 @@
+# RustStrike beacon — auto-reconnect, holds a persistent channel while online
+# and retries forever on a callback cadence when the server is down/closed.
+id = "ruststrike-beacon"
+name = "RustStrike Beacon"
+description = "Auto-reconnect beacon; persistent channel while online, retries on cadence when down"
+base = "ruststrike-beacon.exe"
+variant = "beacon"
+supports = ["silent", "sleep"]
+default_sleep = 5

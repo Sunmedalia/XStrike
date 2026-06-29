@@ -25,6 +25,7 @@ func mountAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agents/", agentArtifactsHandler)
 	mux.HandleFunc("/api/stub/build", stubBuildHandler)
 	mux.HandleFunc("/api/stub/save", stubSaveHandler)
+	mux.HandleFunc("/api/agent/templates", agentTemplatesHandler)
 	mux.HandleFunc("/ws", handleWS)
 }
 

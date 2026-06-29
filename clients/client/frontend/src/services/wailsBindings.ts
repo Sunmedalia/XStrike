@@ -151,19 +151,38 @@ export async function StopRelay(id: number, relayID: string): Promise<void> {
 
 // ---- Stub builder ----
 
-// silent selects the GUI-subsystem base exe (no console window on launch).
-// beacon selects the beacon base exe (auto-reconnecting agent). sleep (>0
-// seconds) is baked into the trailer as the beacon's callback interval
-// (ignored for the stock implant).
-export async function BuildStub(host: string, port: string, silent = false, beacon = false, sleep = 0): Promise<string> {
-  return app().BuildStub(host, port, silent, beacon, sleep) // returns base64 exe bytes
+export interface WailsAgentTemplate {
+  id: string
+  name: string
+  description: string
+  base: string
+  variant: string
+  supports: string[]
+  default_sleep: number
+  default_dwell: number
 }
 
-// BuildStubToProject patches the implant/beacon exe via the core, then pops the
-// OS "Save As" dialog so the operator picks where to save it. Returns {path} —
-// path is "" if the operator cancelled. No browser blob download.
-export async function BuildStubToProject(host: string, port: string, name: string, silent = false, beacon = false, sleep = 0): Promise<{ path: string }> {
-  const s = await app().BuildStubToProject(host, port, name, silent, beacon, sleep)
+// ListAgentTemplates fetches the agent templates from the core
+// (GET /api/agent/templates) so the Generate Agent dropdown is data-driven.
+export async function ListAgentTemplates(): Promise<WailsAgentTemplate[]> {
+  return app().ListAgentTemplates()
+}
+
+// silent selects the GUI-subsystem base exe (no console window on launch).
+// beacon selects the beacon base exe (auto-reconnecting agent); cycle selects
+// the short-cycle beacon (cycle wins over beacon). sleep (>0 seconds) is baked
+// into the trailer as the callback interval (beacon) / sleep between check-ins
+// (cycle); dwell (>0 seconds) is the cycle's connection-hold window. templateId
+// overrides the variant via the core's template lookup when non-empty.
+export async function BuildStub(host: string, port: string, silent = false, beacon = false, cycle = false, sleep = 0, dwell = 0, templateId = ''): Promise<string> {
+  return app().BuildStub(host, port, silent, beacon, cycle, sleep, dwell, templateId) // returns base64 exe bytes
+}
+
+// BuildStubToProject patches the implant/beacon/cycle exe via the core, then
+// pops the OS "Save As" dialog so the operator picks where to save it. Returns
+// {path} — path is "" if the operator cancelled. No browser blob download.
+export async function BuildStubToProject(host: string, port: string, name: string, silent = false, beacon = false, cycle = false, sleep = 0, dwell = 0, templateId = ''): Promise<{ path: string }> {
+  const s = await app().BuildStubToProject(host, port, name, silent, beacon, cycle, sleep, dwell, templateId)
   return JSON.parse(s)
 }
 

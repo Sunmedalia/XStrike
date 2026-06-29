@@ -1,0 +1,36 @@
+[package]
+name = "ruststrike-beacon-cycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lib]
+name = "ruststrike_beacon_cycle"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ruststrike-beacon-cycle"
+path = "src/main.rs"
+
+[[bin]]
+name = "ruststrike-beacon-cycle-silent"
+path = "src/bin/silent.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+ruststrike-protocol = { path = "../protocol" }
+ruststrike-loader = { path = "../loader" }
+
+[build-dependencies]
+winres = "0.1"
+
+[features]
+default = []
+# Re-enables the `[cycle] ...` debug eprintln! logs (compiled out by default so
+# the telltale strings never make it into the release binary). Dev only. In the
+# silent (GUI-subsystem) bin these have no console to write to — use the
+# console bin for verbose debugging.
+verbose = []
