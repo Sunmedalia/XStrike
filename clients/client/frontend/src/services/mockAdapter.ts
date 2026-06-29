@@ -279,9 +279,17 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
     const name = String(body?.name || '')
     const silent = Boolean(body?.silent)
     const beacon = Boolean(body?.beacon)
+    const cycle = Boolean(body?.cycle)
     const sleep = Number(body?.sleep || 0)
-    const r = await Wails.BuildStubToProject(host, port, name, silent, beacon, sleep)
+    const dwell = Number(body?.dwell || 0)
+    const templateId = String(body?.template || '')
+    const r = await Wails.BuildStubToProject(host, port, name, silent, beacon, cycle, sleep, dwell, templateId)
     return ok(config, { success: true, data: { path: r.path } })
+  }
+  // Agent templates — data-driven Generate Agent dropdown.
+  if (method === 'get' && path === '/agent/templates') {
+    const t = await Wails.ListAgentTemplates()
+    return ok(config, { success: true, data: t })
   }
   // Persistent agent roster + artifacts.
   if (method === 'get' && path === '/agents') {
@@ -462,6 +470,16 @@ function blobToB64(bytes: Uint8Array): string {
 // Mock relay store: per-implant pivot listeners (demo mode only).
 const mockRelays: any[] = []
 
+// Mock agent templates for the Generate Agent dropdown (demo mode). Mirrors the
+// three agents/templates/*.toml the real core serves.
+function mockAgentTemplates() {
+  return [
+    { id: 'ruststrike-implant', name: 'RustStrike Implant', description: 'Persistent-channel BOF implant with relay/pivot support', base: 'ruststrike-implant.exe', variant: 'implant', supports: ['silent'], default_sleep: 0, default_dwell: 0 },
+    { id: 'ruststrike-beacon', name: 'RustStrike Beacon', description: 'Auto-reconnect beacon; persistent channel while online, retries on cadence when down', base: 'ruststrike-beacon.exe', variant: 'beacon', supports: ['silent', 'sleep'], default_sleep: 5, default_dwell: 0 },
+    { id: 'ruststrike-beacon-cycle', name: 'RustStrike Beacon (Short-Cycle)', description: 'Short-cycle beacon: short-lived connections, sleeps between check-ins', base: 'ruststrike-beacon-cycle.exe', variant: 'beacon-cycle', supports: ['silent', 'sleep', 'dwell'], default_sleep: 5, default_dwell: 2 },
+  ]
+}
+
 async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
   const method = (config.method || 'get').toLowerCase()
   const path = toApiPath(config.url)
@@ -523,9 +541,12 @@ async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
   }
   if (method === 'post' && path === '/stub/build') {
     const body = parseBody(config)
-    const base = body?.beacon ? 'ruststrike-beacon' : 'ruststrike-implant'
+    const base = body?.cycle ? 'ruststrike-beacon-cycle' : (body?.beacon ? 'ruststrike-beacon' : 'ruststrike-implant')
     const name = String(body?.name || base)
     return ok(config, { success: true, data: { path: `<repo>/agents/${name}.exe (mock)` } })
+  }
+  if (method === 'get' && path === '/agent/templates') {
+    return ok(config, { success: true, data: mockAgentTemplates() })
   }
 
   if (method === 'get' && path.startsWith('/tasks/')) {

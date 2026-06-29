@@ -57,6 +57,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruststrike-beacon-cycle"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "ruststrike-loader",
+ "ruststrike-protocol",
+ "serde_json",
+ "winres",
+]
+
+[[package]]
 name = "ruststrike-implant"
 version = "0.1.0"
 dependencies = [

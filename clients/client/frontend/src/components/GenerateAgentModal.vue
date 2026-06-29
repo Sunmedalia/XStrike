@@ -27,11 +27,14 @@
         </div>
         <div class="field">
           <label>Agent Template</label>
-          <select v-model="form.agent_type" required>
+          <select v-model="form.agent_type" required @change="onTemplateChange">
             <option v-for="agent in availableAgents" :key="agent.id" :value="agent.id">
               {{ agent.name }} ({{ agent.id }})
             </option>
           </select>
+          <p class="hint" v-if="selectedTemplate">
+            {{ selectedTemplate.description }}
+          </p>
         </div>
         <div class="field">
           <label>Callback Host (LHOST)</label>
@@ -43,16 +46,26 @@
             The IP address the agent will connect to. To chain through another agent, start a relay on it (Pivot tab) and pick that relay under "Callback via" above.
           </p>
         </div>
-        <div class="field">
+        <div class="field" v-if="supportsSleep">
           <label>Sleep Time (seconds)</label>
           <input v-model.number="form.sleep_time" type="number" min="1" max="3600" placeholder="e.g. 5" required />
-          <p class="hint">
+          <p class="hint" v-if="isCycleTemplate">
+            Time between check-ins: the agent connects, drains commands for the Dwell window, closes, sleeps this long, and reconnects — periodic short pulses rather than a persistent channel.
+          </p>
+          <p class="hint" v-else>
             Callback interval for <strong>Beacon</strong> agents (1-3600 seconds) — baked into the stub so the agent checks in at this cadence. Ignored by the stock implant, which holds a persistent channel.
+          </p>
+        </div>
+        <div class="field" v-if="supportsDwell">
+          <label>Dwell Time (seconds)</label>
+          <input v-model.number="form.dwell_time" type="number" min="1" max="600" placeholder="e.g. 2" required />
+          <p class="hint">
+            How long each connection stays open to receive commands before closing. Shorter = stealthier (shorter pulses); longer = more time to queue commands per check-in.
           </p>
         </div>
         <div class="field field-check">
           <label class="check">
-            <input v-model="form.beacon" type="checkbox" />
+            <input v-model="form.beacon" type="checkbox" :disabled="!canToggleBeacon" />
             <span>Beacon (auto-reconnect)</span>
           </label>
           <p class="hint">
@@ -94,7 +107,18 @@ const modalStore = useModalStore()
 const toast = useToastStore()
 const appStore = useAppStore()
 const loading = ref(false)
-const availableAgents = ref<Array<{ id: string; name: string; description: string }>>([])
+// Agent template entry — mirrors the core's GET /api/agent/templates response.
+interface AgentTemplate {
+  id: string
+  name: string
+  description: string
+  base: string
+  variant: string
+  supports: string[]
+  default_sleep: number
+  default_dwell: number
+}
+const availableAgents = ref<AgentTemplate[]>([])
 const cacheKey = `ghost-generate-agent:${props.listener.id}`
 
 // Relay targets discovered across all online implants. Each entry lets the
@@ -113,6 +137,7 @@ const form = reactive({
   agent_type: '',
   host: getDefaultCallbackHost(),
   sleep_time: 5,
+  dwell_time: 2,
   silent: true,
   beacon: false,
   callbackMode: 'direct'
@@ -121,6 +146,18 @@ const form = reactive({
 const isRelayMode = computed(() => form.callbackMode !== 'direct')
 const hostPlaceholder = computed(() => isRelayMode.value ? form.host : 'e.g. 192.168.1.100')
 
+// The currently-selected template object (lookup by id), or null.
+const selectedTemplate = computed(() =>
+  availableAgents.value.find((t) => t.id === form.agent_type) || null
+)
+const supportsSleep = computed(() => !!selectedTemplate.value?.supports.includes('sleep'))
+const supportsDwell = computed(() => !!selectedTemplate.value?.supports.includes('dwell'))
+const isCycleTemplate = computed(() => selectedTemplate.value?.variant === 'beacon-cycle')
+// The beacon checkbox only makes sense for the stock implant template (the
+// beacon & short-cycle templates are inherently beacon/cycle). Disabled
+// otherwise so the operator can't request a nonsensical combo.
+const canToggleBeacon = computed(() => selectedTemplate.value?.variant === 'implant')
+
 const loadCachedForm = () => {
   try {
     const raw = localStorage.getItem(cacheKey)
@@ -128,6 +165,7 @@ const loadCachedForm = () => {
     const cached = JSON.parse(raw)
     form.host = cached.host || form.host
     form.sleep_time = Number(cached.sleep_time || form.sleep_time)
+    form.dwell_time = Number(cached.dwell_time || form.dwell_time)
     form.agent_type = cached.agent_type || form.agent_type
     form.silent = cached.silent ?? form.silent
     form.beacon = cached.beacon ?? form.beacon
@@ -139,6 +177,7 @@ const saveCachedForm = () => {
   localStorage.setItem(cacheKey, JSON.stringify({
     host: form.host,
     sleep_time: form.sleep_time,
+    dwell_time: form.dwell_time,
     agent_type: form.agent_type,
     silent: form.silent,
     beacon: form.beacon
@@ -146,8 +185,60 @@ const saveCachedForm = () => {
 }
 
 const fetchAvailableAgents = async () => {
-  availableAgents.value = [{ id: 'ruststrike-implant', name: 'RustStrike Implant', description: 'BOF implant with baked-in callback' }]
-  form.agent_type = 'ruststrike-implant'
+  try {
+    const res = await api.get('/agent/templates')
+    const list: AgentTemplate[] = res.data?.data || []
+    if (list.length) {
+      availableAgents.value = list
+    } else {
+      // No templates from core (e.g. older core without the endpoint) — fall
+      // back to the stock implant so the modal still works.
+      availableAgents.value = [{
+        id: 'ruststrike-implant', name: 'RustStrike Implant',
+        description: 'BOF implant with baked-in callback', base: 'ruststrike-implant.exe',
+        variant: 'implant', supports: ['silent'], default_sleep: 0, default_dwell: 0,
+      }]
+    }
+  } catch {
+    availableAgents.value = [{
+      id: 'ruststrike-implant', name: 'RustStrike Implant',
+      description: 'BOF implant with baked-in callback', base: 'ruststrike-implant.exe',
+      variant: 'implant', supports: ['silent'], default_sleep: 0, default_dwell: 0,
+    }]
+  }
+  // Keep a valid selection: preserve cached agent_type if still present, else
+  // the first template, else ruststrike-implant.
+  const ids = availableAgents.value.map((t) => t.id)
+  if (!ids.includes(form.agent_type)) {
+    form.agent_type = ids[0] || 'ruststrike-implant'
+  }
+  applyTemplateDefaults()
+}
+
+// When the operator picks a template, apply its default sleep/dwell and sync
+// the beacon checkbox to the template's variant (implant template = user's
+// choice; beacon/cycle templates force the flag on).
+const onTemplateChange = () => {
+  applyTemplateDefaults(true)
+}
+
+const applyTemplateDefaults = (forceCadence = false) => {
+  const t = selectedTemplate.value
+  if (!t) return
+  if (forceCadence || form.sleep_time === 0) {
+    form.sleep_time = t.default_sleep || (t.supports.includes('sleep') ? 5 : 0)
+  }
+  if (t.supports.includes('dwell')) {
+    if (forceCadence || !form.dwell_time) {
+      form.dwell_time = t.default_dwell || 2
+    }
+  }
+  // The beacon checkbox is meaningful only for the implant template; for a
+  // beacon/cycle template the variant is implied, so turn the flag off (the
+  // submit path derives beacon/cycle from the template, not this checkbox).
+  if (t.variant !== 'implant') {
+    form.beacon = false
+  }
 }
 
 // Discover running relays across all online implants so the operator can pick
@@ -202,7 +293,14 @@ const submit = async () => {
       : String(props.listener?.port ?? '')
     const safeName = String(props.listener?.name || 'agent').replace(/[^a-z0-9_-]/gi, '_')
     const via = isRelayMode.value ? `_via_${form.callbackMode}` : ''
-    const variant = form.beacon ? '_beacon' : ''
+    // Derive the filename variant marker from the actual resolved variant so it
+    // always reflects what the server builds: the cycle template → _cycle, the
+    // beacon template OR the implant template with the beacon checkbox → _beacon.
+    // (The server lets beacon/cycle booleans override the template's variant
+    // only for the implant template, so isCycleTemplate covers the template path
+    // and form.beacon covers the checkbox path.)
+    const variant = isCycleTemplate.value ? '_cycle'
+      : (form.beacon || selectedTemplate.value?.variant === 'beacon' ? '_beacon' : '')
     const name = `ruststrike${variant}_${safeName}_${form.host}_${port}${via}`
     const res = await api.post('/stub/build', {
       host: form.host,
@@ -210,7 +308,10 @@ const submit = async () => {
       name,
       silent: form.silent,
       beacon: form.beacon,
+      cycle: isCycleTemplate.value,
       sleep: form.sleep_time,
+      dwell: supportsDwell.value ? form.dwell_time : 0,
+      template: form.agent_type,
     })
     const p = res.data?.data?.path
     if (!p) {

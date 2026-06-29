@@ -1,0 +1,8 @@
+# RustStrike stock implant — persistent reverse-connect channel with relay/pivot.
+id = "ruststrike-implant"
+name = "RustStrike Implant"
+description = "Persistent-channel BOF implant with relay/pivot support"
+base = "ruststrike-implant.exe"
+variant = "implant"
+supports = ["silent"]
+default_sleep = 0

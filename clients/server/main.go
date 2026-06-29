@@ -132,6 +132,10 @@ func main() {
 	// HTTP/WS for operators.
 	mux := http.NewServeMux()
 	mountAPI(mux)
+	// Load agent templates (agents/templates/*.toml) so the Generate Agent
+	// dropdown is data-driven. Non-fatal if the dir is missing — the stub
+	// builder falls back to the beacon/cycle booleans.
+	loadAgentTemplates()
 	handler := requireOperatorAuth(mux)
 	httpAddr := net.JoinHostPort(cfg.Server.OperatorBindIP, cfg.Server.OperatorHTTPPort)
 	fmt.Fprintf(os.Stderr, "[core] operator HTTP on %s (auth required, try POST /api/auth/login, GET /api/implants, ws /ws)\n", httpAddr)
