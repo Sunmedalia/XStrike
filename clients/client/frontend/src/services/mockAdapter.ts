@@ -278,7 +278,9 @@ async function realHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
     const port = String(body?.port || '')
     const name = String(body?.name || '')
     const silent = Boolean(body?.silent)
-    const r = await Wails.BuildStubToProject(host, port, name, silent)
+    const beacon = Boolean(body?.beacon)
+    const sleep = Number(body?.sleep || 0)
+    const r = await Wails.BuildStubToProject(host, port, name, silent, beacon, sleep)
     return ok(config, { success: true, data: { path: r.path } })
   }
   // Persistent agent roster + artifacts.
@@ -521,7 +523,8 @@ async function mockHandle(config: AxiosRequestConfig): Promise<AxiosResponse> {
   }
   if (method === 'post' && path === '/stub/build') {
     const body = parseBody(config)
-    const name = String(body?.name || 'ruststrike-implant')
+    const base = body?.beacon ? 'ruststrike-beacon' : 'ruststrike-implant'
+    const name = String(body?.name || base)
     return ok(config, { success: true, data: { path: `<repo>/agents/${name}.exe (mock)` } })
   }
 

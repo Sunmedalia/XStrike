@@ -45,11 +45,19 @@ BEACON_INTERVAL=30
 BEACON_JITTER=20
 ```
 
-The **appended-config trailer** uses the same opaque magic as the stock implant
-(`host\0port\0` near the end of the exe), so the existing stub builder
-(`tools/stubbuilder`, `POST /api/stub/build`) can patch a beacon exe and have it
-check in with no args. The trailer only carries host:port; interval/jitter come
-from env or defaults on the beacon side.
+The **appended-config trailer** uses the same opaque magic as the stock implant,
+extended with an optional third field — the callback interval — so a beacon
+stub checks in at the operator-chosen cadence with no args/env:
+
+    <exe bytes>... <TrailerMagic> <host> "\x00" <port> "\x00" [<interval_secs> "\x00"]
+
+The stock implant stops after `port` and ignores trailing bytes, so this is
+backwards compatible. The existing stub builder (`tools/stubbuilder`,
+`POST /api/stub/build`) patches a beacon exe when `beacon:true` is passed, and
+the GUI's Generate Agent modal has a **Beacon (auto-reconnect)** checkbox that
+threads `beacon` + the Sleep Time through the core, which appends the interval.
+The trailer carries host:port[:interval]; jitter still comes from env/CLI/
+defaults on the beacon side.
 
 Defaults: `127.0.0.1:4444`, interval `5s`, jitter `0%`.
 
