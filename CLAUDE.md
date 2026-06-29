@@ -168,6 +168,16 @@ Module map: `agent.zig`↔`crates/implant/src/lib.rs` (run loop, trailer + CLI r
 
 Verified end-to-end against the Go core: reverse-connect, `hello`, BOF exec (`hello`/`sysinfo` auto-collect/`cmd_exec whoami`/`proc_list`), operator-driven BOF via REST task-poll, and pivot/relay (a child implant connected through a relay port appears at the core as a normal new implant). Same trailer magic as `tools/stubbuilder` + Go `stub_patcher.go`.
 
+**Zig implant OPSEC / stealth (release build)** — the same layers as the Rust implant, ported to Zig (see `zig-implant/README.md`):
+
+- **PE metadata** — `zig-implant/resource.rc` (compiled by Zig's built-in RC compiler via `build.zig::addWin32ResourceFile`) embeds a VERSIONINFO + manifest: FileDescription/ProductName/CompanyName = "System Update Helper", FileVersion 10.0.22621.0, `asInvoker`, common-controls v6, Win7-11 supportedOS. `zig-implant/updatehelper.manifest` is a copy of `crates/implant/updatehelper.manifest`.
+- **Stripped** — `build.zig` sets `strip = true` on both modules: no debug info, no PDB, no source paths in the release exe.
+- **Benign string padding** — `zig-implant/src/stealth.zig` `export const benign_padding` (`@embedFile` of `benign_strings.txt`, a fake EULA copied from `crates/implant/src/`) dilutes suspicious strings and keeps entropy ~6.6 bits/byte. `main.zig::stealth.touch()` retains it under LTO.
+- **XOR-encoded Beacon API names** — `zig-implant/src/loader/exec.zig::buildExternalMap` registers the Beacon stubs under names decoded at *runtime* from `ENC_BEACON_*` arrays in `stealth.zig` (key 0x2A, shared with `crates/loader/src/exec.rs`), so `BeaconPrintf`/`BeaconOutput`/… never appear in `.rdata`. The Beacon stubs in `beacon.zig` are NOT `export`'d (an exported name would leak via the export table) — `@intFromPtr` retains them. The "Beacon" prefix check is runtime-decoded too. CRT names stay literal. The XOR key is a mutable global so the optimizer can't fold the decode back into plaintext.
+- **Opaque trailer magic** — same `0x7C 0x53 0x9A 0x2E 0xD1 0x04 0xB8 0x6F 0x11 0xA3` as the Rust implant / `tools/stubbuilder` / Go `stub_patcher.go`.
+
+Verified: `zig build -Doptimize=ReleaseSmall` → 150 KB, no `Beacon*`/`implant`/`ruststrike`/`zig-implant` strings, entropy 6.618 bits/byte, VERSIONINFO present, and the full connect + sysinfo + cmd_exec + proc_list flow still works against the Go core.
+
 ### Running the whole stack
 
 ```sh

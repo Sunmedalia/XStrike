@@ -1,9 +1,16 @@
 //! Beacon API stubs. Mirrors `crates/loader/src/stubs.rs`.
 //!
-//! These are `extern "C"` functions whose addresses are patched into BOF
-//! relocations for `Beacon*` symbols. Output is captured into a thread-local
-//! buffer that `run_bof` returns. Windows-only (relies on the x64 MSVC ABI for
-//! capturing the first two variadic args of BeaconPrintf via r8/r9).
+//! These are `callconv(.c)` functions whose addresses are patched into BOF
+//! relocations for `Beacon*` symbols (registered under XOR-decoded names in
+//! `exec.zig::buildExternalMap` — see `stealth.zig`). Output is captured into a
+//! thread-local buffer that `runBof` returns. Windows-only (relies on the x64
+//! MSVC ABI for capturing the first two variadic args of BeaconPrintf via
+//! r8/r9).
+//!
+//! The functions are intentionally NOT `export`'d: an exported symbol name like
+//! "BeaconPrintf" would land in the PE export table / `.rdata` as plaintext.
+//! Their addresses are taken with `@intFromPtr` in `buildExternalMap`, which is
+//! enough for the linker to retain them without exposing the name.
 
 const std = @import("std");
 
@@ -68,7 +75,7 @@ fn readPtr(cell: [*]const u8, off: usize) ?[*]const u8 {
 }
 
 /// void BeaconDataParse(datap *parser, char *buffer, int size)
-pub export fn BeaconDataParse(parser: ?[*]u8, buffer: ?[*]const u8, size: i32) callconv(.c) void {
+pub fn BeaconDataParse(parser: ?[*]u8, buffer: ?[*]const u8, size: i32) callconv(.c) void {
     const p = parser orelse return;
     writePtr(p, DATAP_ORIG, buffer);
     writePtr(p, DATAP_BUF, buffer);
@@ -77,7 +84,7 @@ pub export fn BeaconDataParse(parser: ?[*]u8, buffer: ?[*]const u8, size: i32) c
 }
 
 /// int BeaconDataInt(datap *parser) — 4-byte big-endian (CS convention).
-pub export fn BeaconDataInt(parser: ?[*]u8) callconv(.c) i32 {
+pub fn BeaconDataInt(parser: ?[*]u8) callconv(.c) i32 {
     const p = parser orelse return 0;
     const buf = readPtr(p, DATAP_BUF) orelse return 0;
     var v: i32 = 0;
@@ -90,7 +97,7 @@ pub export fn BeaconDataInt(parser: ?[*]u8) callconv(.c) i32 {
 }
 
 /// short BeaconDataShort(datap *parser) — 2-byte big-endian.
-pub export fn BeaconDataShort(parser: ?[*]u8) callconv(.c) i16 {
+pub fn BeaconDataShort(parser: ?[*]u8) callconv(.c) i16 {
     const p = parser orelse return 0;
     const buf = readPtr(p, DATAP_BUF) orelse return 0;
     const v: i16 = @truncate((@as(i32, buf[0]) << 8) | @as(i32, buf[1]));
@@ -101,7 +108,7 @@ pub export fn BeaconDataShort(parser: ?[*]u8) callconv(.c) i16 {
 }
 
 /// char *BeaconDataExtract(datap *parser, int *size) — 4-byte BE length-prefixed blob.
-pub export fn BeaconDataExtract(parser: ?[*]u8, size: ?[*]i32) callconv(.c) ?[*]const u8 {
+pub fn BeaconDataExtract(parser: ?[*]u8, size: ?[*]i32) callconv(.c) ?[*]const u8 {
     const p = parser orelse return null;
     const len = BeaconDataInt(parser);
     const buf = readPtr(p, DATAP_BUF) orelse return null;
@@ -115,7 +122,7 @@ pub export fn BeaconDataExtract(parser: ?[*]u8, size: ?[*]i32) callconv(.c) ?[*]
 }
 
 /// void BeaconOutput(int type, char *data, int len)
-pub export fn BeaconOutput(_: i32, data: ?[*]const u8, len: i32) callconv(.c) void {
+pub fn BeaconOutput(_: i32, data: ?[*]const u8, len: i32) callconv(.c) void {
     const d = data orelse return;
     if (len <= 0) return;
     append(d[0..@intCast(len)]);
@@ -127,7 +134,7 @@ pub fn beaconUnimplemented() callconv(.c) void {
 }
 
 /// BOOL BeaconIsAdmin() — v1 stub: report not admin.
-pub export fn BeaconIsAdmin() callconv(.c) i32 {
+pub fn BeaconIsAdmin() callconv(.c) i32 {
     return 0;
 }
 
@@ -135,7 +142,7 @@ pub export fn BeaconIsAdmin() callconv(.c) i32 {
 ///
 /// Captures the first two variadic args via a1/a2 (r8/r9 on x64 MSVC). Format
 /// specifiers beyond the first two are emitted literally.
-pub export fn BeaconPrintf(typ: i32, fmt: ?[*:0]const u8, a1: u64, a2: u64) callconv(.c) void {
+pub fn BeaconPrintf(typ: i32, fmt: ?[*:0]const u8, a1: u64, a2: u64) callconv(.c) void {
     const f = fmt orelse {
         var tmp: [48]u8 = undefined;
         const s = std.fmt.bufPrint(&tmp, "[printf type={d} null fmt]", .{typ}) catch "[printf null fmt]";

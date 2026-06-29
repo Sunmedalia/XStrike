@@ -9,7 +9,15 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        // Strip debug info / PDB reference / source paths from the release exe
+        // (mirrors the Rust implant's stripped release profile). Keeps the
+        // binary small and free of build-account/path telltales.
+        .strip = true,
     });
+    // Embed PE VERSIONINFO + manifest ("System Update Helper") so the exe's
+    // metadata reads as an ordinary application, not a stripped binary. Mirrors
+    // crates/implant/build.rs (winres).
+    console_mod.addWin32ResourceFile(.{ .file = b.path("resource.rc") });
     const exe_console = b.addExecutable(.{
         .name = "zig-implant",
         .root_module = console_mod,
@@ -23,7 +31,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = true,
     });
+    silent_mod.addWin32ResourceFile(.{ .file = b.path("resource.rc") });
     const exe_silent = b.addExecutable(.{
         .name = "zig-implant-silent",
         .root_module = silent_mod,

